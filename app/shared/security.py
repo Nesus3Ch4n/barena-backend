@@ -18,10 +18,10 @@ from app.shared.errors import Unauthorized
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
 
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me-32-chars-minimum")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "15"))
-JWT_REFRESH_DAYS = int(os.getenv("JWT_REFRESH_DAYS", "7"))
+JWT_SECRET = os.getenv("JWT_SECRET") or "dev-secret-change-me-32-chars-minimum"
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM") or "HS256"
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES") or "15")
+JWT_REFRESH_DAYS = int(os.getenv("JWT_REFRESH_DAYS") or "7")
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)

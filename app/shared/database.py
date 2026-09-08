@@ -5,7 +5,11 @@ import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/servetrack")
+DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql+asyncpg://postgres:postgres@localhost:5432/servetrack"
+
+# Evitar crash si Vercel deja DATABASE_URL vacío ("")
+if not DATABASE_URL or DATABASE_URL.strip() == "":
+    DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/servetrack"
 
 engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
