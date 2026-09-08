@@ -472,19 +472,7 @@ def upgrade() -> None:
     END;
     $$ LANGUAGE plpgsql;
 
-    -- Triggers en partidos
-    DROP TRIGGER IF EXISTS trg_rankings_partidos ON partidos;
-    CREATE TRIGGER trg_rankings_partidos
-    AFTER INSERT OR UPDATE OF estado, ganador_id OR DELETE ON partidos
-    FOR EACH ROW EXECUTE FUNCTION trg_recalc_rankings();
-
-    -- Triggers en sets_partido (cambia puntos/sets)
-    DROP TRIGGER IF EXISTS trg_rankings_sets ON sets_partido;
-    CREATE TRIGGER trg_rankings_sets
-    AFTER INSERT OR UPDATE OR DELETE ON sets_partido
-    FOR EACH ROW EXECUTE FUNCTION trg_recalc_rankings_from_set();
-
-    -- Helper para sets: necesita categoria/grupo via partido
+    -- Helper para sets: necesita categoria/grupo via partido (DEBE IR ANTES del trigger)
     CREATE OR REPLACE FUNCTION trg_recalc_rankings_from_set() RETURNS TRIGGER AS $$
     DECLARE
         v_grupo_id UUID;
@@ -499,14 +487,18 @@ def upgrade() -> None:
     END;
     $$ LANGUAGE plpgsql;
 
+    -- Triggers en partidos
+    DROP TRIGGER IF EXISTS trg_rankings_partidos ON partidos;
+    CREATE TRIGGER trg_rankings_partidos
+    AFTER INSERT OR UPDATE OF estado, ganador_id OR DELETE ON partidos
+    FOR EACH ROW EXECUTE FUNCTION trg_recalc_rankings();
+
+    -- Triggers en sets_partido (cambia puntos/sets)
     DROP TRIGGER IF EXISTS trg_rankings_sets ON sets_partido;
     CREATE TRIGGER trg_rankings_sets
     AFTER INSERT OR UPDATE OR DELETE ON sets_partido
     FOR EACH ROW EXECUTE FUNCTION trg_recalc_rankings_from_set();
     """)
-
-    # Fix duplicate trigger creation - ensure clean
-    op.execute("DROP TRIGGER IF EXISTS trg_rankings_sets ON sets_partido; CREATE TRIGGER trg_rankings_sets AFTER INSERT OR UPDATE OR DELETE ON sets_partido FOR EACH ROW EXECUTE FUNCTION trg_recalc_rankings_from_set();")
 
     # ---------- SEED ----------
     op.execute("""

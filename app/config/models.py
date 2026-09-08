@@ -1,3 +1,4 @@
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import String, JSON, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.database import Base
