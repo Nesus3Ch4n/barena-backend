@@ -13,12 +13,12 @@ from app.shared.errors import (
 
 # Routers screaming
 from app.auth.router import router as auth_router
-from app.torneos.router import router as torneos_router
-from app.equipos.router import router as equipos_router
+from app.torneos.router import router as torneos_router, public_router as public_router
+from app.equipos.router import router as equipos_router, equipo_router as equipo_op_router
 from app.atletas.router import router as atletas_router
-from app.partidos.router import router as partidos_router
-from app.estadisticas.router import router as estadisticas_router
-from app.rankings.router import router as rankings_router
+from app.partidos.router import router as partidos_router, torneo_partidos_router, categoria_fixture_router
+from app.estadisticas.router import router as estadisticas_router, atleta_router as estadisticas_atleta_router
+from app.rankings.router import router as rankings_router, categoria_router as rankings_categoria_router, torneo_router as rankings_torneo_router
 from app.reportes.router import router as reportes_router
 from app.config.router import router as config_router
 
@@ -47,6 +47,13 @@ app.add_exception_handler(Exception, unhandled_error_handler)
 # Routers /api/v1
 for r in [auth_router, torneos_router, equipos_router, atletas_router, partidos_router, estadisticas_router, rankings_router, reportes_router, config_router]:
     app.include_router(r, prefix="/api/v1")
+app.include_router(equipo_op_router, prefix="/api/v1")
+app.include_router(public_router, prefix="/api/v1")
+app.include_router(torneo_partidos_router, prefix="/api/v1")
+app.include_router(categoria_fixture_router, prefix="/api/v1")
+app.include_router(estadisticas_atleta_router, prefix="/api/v1")
+app.include_router(rankings_categoria_router, prefix="/api/v1")
+app.include_router(rankings_torneo_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health(request: Request):

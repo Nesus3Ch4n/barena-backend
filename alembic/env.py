@@ -10,6 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.shared.database import Base  # noqa: F401  # import all models
 # Ensure all models are imported so Base.metadata includes them
 import app.auth.models  # noqa: F401
+import app.torneos.models  # noqa: F401
+import app.equipos.models  # noqa: F401
+import app.atletas.models  # noqa: F401
+import app.partidos.models  # noqa: F401
+import app.estadisticas.models  # noqa: F401
+import app.rankings.models  # noqa: F401
+import app.reportes.models  # noqa: F401
+import app.config.models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
