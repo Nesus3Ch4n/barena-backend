@@ -44,8 +44,8 @@ async def register_user(db: AsyncSession, email: str, password: str, nombre_comp
 
     await db.flush()
     roles = ["atleta"]
-    access = create_access_token({"sub": user.id, "roles": roles, "email": user.email})
-    refresh = create_refresh_token({"sub": user.id, "type": "refresh"})
+    access = create_access_token({"sub": str(user.id), "roles": roles, "email": user.email})
+    refresh = create_refresh_token({"sub": str(user.id), "type": "refresh"})
     return user, access, refresh
 
 # ---------- Login ----------
@@ -56,8 +56,8 @@ async def login_user(db: AsyncSession, email: str, password: str) -> tuple[User,
     roles = await get_roles_for_user(db, user.id)
     if not roles:
         roles = ["atleta"]
-    access = create_access_token({"sub": user.id, "roles": roles, "email": user.email})
-    refresh = create_refresh_token({"sub": user.id, "type": "refresh"})
+    access = create_access_token({"sub": str(user.id), "roles": roles, "email": user.email})
+    refresh = create_refresh_token({"sub": str(user.id), "type": "refresh"})
     return user, access, refresh
 
 # ---------- Refresh ----------
@@ -74,8 +74,8 @@ async def refresh_token(db: AsyncSession, refresh_token_str: str) -> tuple[str, 
     if not user:
         raise Unauthorized("Usuario no existe")
     roles = await get_roles_for_user(db, user.id)
-    new_access = create_access_token({"sub": user.id, "roles": roles, "email": user.email})
-    new_refresh = create_refresh_token({"sub": user.id, "type": "refresh"})
+    new_access = create_access_token({"sub": str(user.id), "roles": roles, "email": user.email})
+    new_refresh = create_refresh_token({"sub": str(user.id), "type": "refresh"})
     return new_access, new_refresh
 
 # ---------- Reclamar atleta ----------
