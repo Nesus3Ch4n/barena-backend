@@ -30,10 +30,11 @@ app = FastAPI(
 
 # Middleware
 app.add_middleware(RequestIDMiddleware)
-origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,https://*.vercel.app").split(",")
+origins = os.getenv("CORS_ORIGINS", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in origins if o.strip()],
+    allow_origins=[o.strip() for o in origins.split(",") if o.strip()],
+    allow_origin_regex=(os.getenv("CORS_ORIGIN_REGEX") or r"^https://[a-z0-9-]+\.vercel\.app$|^http://(?:localhost|127\.0\.0\.1|(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d+\.\d+)(?::\d+)?$"),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
