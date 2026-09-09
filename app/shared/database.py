@@ -13,13 +13,17 @@ if not DATABASE_URL or DATABASE_URL.strip() == "":
 
 # pgbouncer (Supabase pooler) no soporta prepared statements -> desactivar cache
 # asyncpg + pgbouncer transaction mode: statement_cache_size=0 es obligatorio
+# Se fuerza via URL + connect_args + NullPool para evitar cache en Vercel
 from sqlalchemy.pool import NullPool
+if "statement_cache_size" not in DATABASE_URL:
+    sep = "&" if "?" in DATABASE_URL else "?"
+    DATABASE_URL = f"{DATABASE_URL}{sep}statement_cache_size=0"
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
     poolclass=NullPool,
-    connect_args={"statement_cache_size": 0},
+    connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0},
 )
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
