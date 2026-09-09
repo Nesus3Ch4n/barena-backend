@@ -26,6 +26,14 @@ async def torneo_config(torneo_id: str, user=Depends(get_current_user), db: Asyn
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
     return {"success": True, "data": {"torneo_id": torneo.id, "config_visibilidad": torneo.config_visibilidad, "publico": torneo.publico}, "error": None}
 
+@router.get("/deportes")
+async def listar_deportes(db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    from app.torneos.models import Deporte
+    res = await db.execute(select(Deporte).where(Deporte.activo == True))
+    deportes = [{"id": d.id, "nombre": d.nombre, "icono": d.icono} for d in res.scalars().all()]
+    return {"success": True, "data": deportes, "error": None}
+
 @router.patch("/flags/{clave}", response_model=dict)
 async def update_flag(clave: str, body: dict, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # solo super_admin
