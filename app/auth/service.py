@@ -108,6 +108,16 @@ async def refresh_token(db: AsyncSession, refresh_token_str: str) -> tuple[str, 
     await _store_refresh_token(db, user.id, new_refresh)
     return new_access, new_refresh
 
+# ---------- Logout ----------
+async def logout_user(db: AsyncSession, refresh_token_str: str) -> bool:
+    payload = verify_token(refresh_token_str)
+    jti = payload.get("jti")
+    if not jti:
+        return False
+    await db.execute(update(RefreshToken).where(RefreshToken.jti == jti).values(revoked=True))
+    await db.flush()
+    return True
+
 # ---------- Reclamar atleta ----------
 async def reclamar_atleta(db: AsyncSession, user_id: str, codigo: str) -> dict:
     codigo = codigo.upper().strip()

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.auth.schemas import RegisterIn, LoginIn, RefreshIn, TokenOut, MeOut, ReclamarIn
-from app.auth.service import register_user, login_user, refresh_token, reclamar_atleta, get_roles_for_user, get_profile
+from app.auth.service import register_user, login_user, refresh_token, logout_user, reclamar_atleta, get_roles_for_user, get_profile
 from app.auth.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -29,6 +29,11 @@ async def login(body: LoginIn, db: AsyncSession = Depends(get_db)):
 async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_db)):
     new_access, new_refresh = await refresh_token(db, body.refresh_token)
     return {"success": True, "data": {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}, "error": None}
+
+@router.post("/logout", response_model=dict)
+async def logout(body: RefreshIn, db: AsyncSession = Depends(get_db)):
+    revocado = await logout_user(db, body.refresh_token)
+    return {"success": True, "data": {"revocado": revocado}, "error": None}
 
 @router.get("/me", response_model=dict)
 async def me(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
