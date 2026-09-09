@@ -9,7 +9,10 @@ class RegisterIn(BaseModel):
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1)
+
+class RefreshIn(BaseModel):
+    refresh_token: str = Field(min_length=10)
 
 class TokenOut(BaseModel):
     access_token: str

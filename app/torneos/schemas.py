@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
 from datetime import date
 
@@ -7,13 +7,27 @@ class CategoriaIn(BaseModel):
     formato: str = Field(default="grupos", pattern="^(grupos|eliminatoria|round_robin|custom)$")
     cuadro_perdedores: bool = False
     equipos_x_grupo: int = Field(default=4, ge=2, le=8)
-    sets_x_partido: int = Field(default=3, ge=1, le=5)
+    sets_x_partido: int = Field(default=3)
     puntos_x_set: int = Field(default=21)
     avance_x_grupo: int = Field(default=2, ge=1, le=4)
     criterio_clasif: str = "V>S>P>DP"
 
+    @field_validator("sets_x_partido")
+    @classmethod
+    def check_sets(cls, v):
+        if v not in (1, 3, 5):
+            raise ValueError("sets_x_partido debe ser 1, 3 o 5")
+        return v
+
+    @field_validator("puntos_x_set")
+    @classmethod
+    def check_puntos(cls, v):
+        if v not in (15, 21, 25):
+            raise ValueError("puntos_x_set debe ser 15, 21 o 25")
+        return v
+
     class Config:
-        extra = "ignore"
+        extra = "forbid"
 
 class RamaIn(BaseModel):
     tipo: str = Field(pattern="^(masc|fem|mixto)$")
@@ -31,6 +45,11 @@ class TorneoCreate(BaseModel):
     ciudad: Optional[str] = None
     publico: bool = False
     ramas: List[RamaIn] = Field(default_factory=list)
+
+    @field_validator("deporte_nombre")
+    @classmethod
+    def normalize_deporte(cls, v):
+        return v.lower().strip() if v else v
 
 class VisibilidadUpdate(BaseModel):
     fixture_visible: Optional[bool] = None

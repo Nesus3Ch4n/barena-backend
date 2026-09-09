@@ -49,6 +49,6 @@ async def get_atleta_stats(db: AsyncSession, atleta_id: str) -> dict:
     total_dig = sum(s.defensas_dig for s in stats)
     total_ataques = sum(s.ataques_total for s in stats)
     total_saques = sum(s.saques_total for s in stats)
-    eft_atk = round((total_atk / (total_ataques - total_err) * 100) if (total_ataques - total_err) > 0 else 0, 2)
+    eft_atk = round((total_atk / total_ataques * 100) if total_ataques > 0 else 0, 2)
     eft_saq = round((total_ace / total_saques * 100) if total_saques > 0 else 0, 2)
     return {"atleta_id": atleta_id, "partidos": len(stats), "total_pts": total_pts, "atk": total_atk, "blk": total_blk, "ace": total_ace, "err": total_err, "dig": total_dig, "eft_atk": eft_atk, "eft_saq": eft_saq, "stats": [{"partido_id": s.partido_id, "ataques_pts": s.ataques_pts, "bloqueos_pts": s.bloqueos_pts, "saques_directos": s.saques_directos} for s in stats]}

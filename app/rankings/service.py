@@ -17,8 +17,7 @@ async def list_rankings_general(db: AsyncSession, categoria_id: str):
     res = await db.execute(select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id).order_by(RankingGeneral.posicion))
     rows = res.scalars().all()
     if not rows:
-        # si no hay rankings (trigger no corrió por sqlite), fallback compute simple
-        raise NotFound("RANKING_NOT_FOUND", "Ranking no disponible aún, finaliza partidos", {"categoria_id": categoria_id})
+        return []
     return rows
 
 async def list_rankings_torneo(db: AsyncSession, torneo_id: str):

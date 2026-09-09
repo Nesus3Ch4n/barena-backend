@@ -35,5 +35,14 @@ class Profile(Base):
 
 class Role(Base):
     __tablename__ = "roles"
-    id: Mapped[str] = mapped_column(String(30), primary_key=True)  # super_admin, organizador, juez_anotador, atleta
+    id: Mapped[str] = mapped_column(String(30), primary_key=True)
     descripcion: Mapped[str] = mapped_column(String(120), nullable=True)
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    jti: Mapped[str] = mapped_column(UUID(as_uuid=False), unique=True, nullable=False)
+    revoked: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expira_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import String, Integer, Boolean, ForeignKey, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -13,7 +14,7 @@ class Partido(Base):
     equipo_local_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=False)
     equipo_visit_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=False)
     cancha: Mapped[str] = mapped_column(String(50), nullable=True)
-    fecha_hora: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_hora: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     estado: Mapped[str] = mapped_column(String(20), default="pendiente", nullable=False)
     ganador_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=True)
     es_cuadro_perdedores: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import String, ForeignKey, DateTime, func, JSON
+from sqlalchemy import String, ForeignKey, DateTime, func, JSON, text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.database import Base
 
@@ -12,4 +12,4 @@ class ReporteCache(Base):
     params: Mapped[dict] = mapped_column(JSON, nullable=True)
     pdf_url: Mapped[str] = mapped_column(String(500), nullable=True)
     generated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    expira_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expira_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=text("now() + interval '5 minutes'"))

@@ -16,7 +16,12 @@ async def flags(db: AsyncSession = Depends(get_db)):
 
 @router.get("/torneo/{torneo_id}", response_model=dict)
 async def torneo_config(torneo_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    # retorna config_visibilidad
+    from uuid import UUID as _UUID
+    try:
+        _UUID(torneo_id)
+    except ValueError:
+        from app.shared.errors import BadRequest
+        raise BadRequest("INVALID_UUID", "UUID inválido")
     from sqlalchemy import select
     from app.torneos.models import Torneo
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))

@@ -20,7 +20,7 @@
 Configurar en `vercel.com → barena-backend → Settings → Environment Variables` (Production + Preview + Development):
 
 ```
-DATABASE_URL=postgresql+asyncpg://postgres.proyecto:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+DATABASE_URL=postgresql+psycopg://postgres.proyecto:password@aws-1-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require
 DATABASE_URL_SYNC=postgresql://postgres.proyecto:password@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 SUPABASE_URL=https://proyecto.supabase.co
 SUPABASE_SERVICE_KEY=eyJ...

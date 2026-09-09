@@ -2,6 +2,7 @@ import re
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from app.torneos.models import Torneo, Rama, Categoria, Deporte
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
@@ -36,6 +37,7 @@ async def get_deporte_id(db: AsyncSession, deporte_id: str = None, deporte_nombr
     return dep.id
 
 async def create_torneo(db: AsyncSession, user_id: str, data: TorneoCreate) -> dict:
+    import unicodedata
     if data.fecha_inicio and data.fecha_fin and data.fecha_fin < data.fecha_inicio:
         raise AppError(400, "FECHAS_INVALIDAS", "fecha_fin debe ser >= fecha_inicio")
     deporte_id = await get_deporte_id(db, data.deporte_id, data.deporte_nombre or "volei_playa")
@@ -63,7 +65,13 @@ async def create_torneo(db: AsyncSession, user_id: str, data: TorneoCreate) -> d
         estado="borrador",
     )
     db.add(torneo)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        import uuid as _uuid
+        slug = f"{base_slug}-{_uuid.uuid4().hex[:8]}"
+        torneo.slug = slug
+        await db.flush()
     await ensure_organizador_role(db, user_id)
 
     ramas_out = []

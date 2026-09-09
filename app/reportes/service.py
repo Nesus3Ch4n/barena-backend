@@ -6,15 +6,16 @@ from app.torneos.models import Torneo
 from app.shared.errors import NotFound
 
 async def get_or_create_cache(db: AsyncSession, torneo_id: str, tipo: str, params: dict, generator):
-    # check cache
     res = await db.execute(select(ReporteCache).where(ReporteCache.torneo_id == torneo_id, ReporteCache.tipo == tipo).order_by(ReporteCache.generated_at.desc()))
     cache = res.scalars().first()
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
-    if cache and cache.expira_at and cache.expira_at > now and cache.params == params:
+    # Compare params as sorted JSON strings to avoid dict key order issues
+    params_str = json.dumps(params, sort_keys=True, default=str)
+    cache_params_str = json.dumps(cache.params, sort_keys=True, default=str) if cache and cache.params else None
+    if cache and cache.expira_at and cache.expira_at > now and params_str == cache_params_str:
         return cache
-    # generate
-    pdf_url = await generator()  # for MVP returns dummy path
+    pdf_url = await generator()
     new = ReporteCache(torneo_id=torneo_id, tipo=tipo, params=params, pdf_url=pdf_url)
     db.add(new)
     await db.flush()
