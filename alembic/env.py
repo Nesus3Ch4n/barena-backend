@@ -28,9 +28,11 @@ target_metadata = Base.metadata
 def get_url():
     # Prefer SYNC url for alembic (psycopg2)
     url = os.getenv("DATABASE_URL_SYNC") or os.getenv("DATABASE_URL", "")
-    # alembic needs sync driver, replace asyncpg -> psycopg2
+    # alembic needs sync driver, replace async drivers -> plain postgresql (psycopg2)
     if url.startswith("postgresql+asyncpg"):
         url = url.replace("postgresql+asyncpg", "postgresql")
+    if url.startswith("postgresql+psycopg"):
+        url = url.replace("postgresql+psycopg", "postgresql")
     if url:
         return url
     return config.get_main_option("sqlalchemy.url")
