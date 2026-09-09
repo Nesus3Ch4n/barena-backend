@@ -11,7 +11,13 @@ DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql+asyncpg://postgres:postg
 if not DATABASE_URL or DATABASE_URL.strip() == "":
     DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/servetrack"
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0})
+# pgbouncer (Supabase pooler) no soporta prepared statements -> desactivar cache
+# Necesario para asyncpg + transaction mode
+if "statement_cache_size" not in DATABASE_URL:
+    sep = "&" if "?" in DATABASE_URL else "?"
+    DATABASE_URL = f"{DATABASE_URL}{sep}statement_cache_size=0&prepared_statement_cache_size=0"
+
+engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0, "prepared_statement_name_func": lambda: None})
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 class Base(DeclarativeBase):
