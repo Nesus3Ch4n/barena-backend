@@ -1,12 +1,19 @@
+from uuid import UUID as _UUID
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
-from app.shared.errors import AppError, NotFound, Forbidden
+from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
 from app.torneos.service import create_torneo, get_torneo_detail, list_torneos, update_visibilidad, get_public_by_slug
 from app.torneos.models import Torneo
+
+def _validate_uuid(value: str, field: str = "id"):
+    try:
+        _UUID(value)
+    except ValueError:
+        raise BadRequest("INVALID_UUID", f"{field} inválido")
 
 router = APIRouter(prefix="/torneos", tags=["torneos"])
 public_router = APIRouter(prefix="/public", tags=["public"])
@@ -26,6 +33,7 @@ async def listar_torneos(request: Request, user=Depends(get_current_user), db: A
 
 @router.get("/{torneo_id}", response_model=dict)
 async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
     # check ownership via RLS-like logic
     is_super = "super_admin" in getattr(request.state, "roles", [])
     # fetch
@@ -42,6 +50,7 @@ async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_curr
 
 @router.patch("/{torneo_id}/visibilidad", response_model=dict)
 async def patch_visibilidad(torneo_id: str, body: VisibilidadUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
     # verify owner
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
