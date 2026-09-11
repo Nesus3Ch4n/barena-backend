@@ -125,10 +125,11 @@ async def get_torneo_detail(db: AsyncSession, torneo_id: str, current_user_id: s
     return {"torneo": torneo, "ramas": result}
 
 async def list_torneos(db: AsyncSession, user_id: str, is_super: bool):
+    from sqlalchemy import or_
     if is_super:
         res = await db.execute(select(Torneo).order_by(Torneo.creado_en.desc()))
     else:
-        res = await db.execute(select(Torneo).where(Torneo.organizador_id == user_id).order_by(Torneo.creado_en.desc()))
+        res = await db.execute(select(Torneo).where(or_(Torneo.organizador_id == user_id, Torneo.publico == True)).order_by(Torneo.creado_en.desc()))
     return res.scalars().all()
 
 async def update_visibilidad(db: AsyncSession, torneo_id: str, data: VisibilidadUpdate) -> Torneo:
