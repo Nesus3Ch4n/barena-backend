@@ -68,6 +68,39 @@ class TorneoUpdate(BaseModel):
     publico: Optional[bool] = None
     deporte_nombre: Optional[str] = Field(default=None, max_length=50)
 
+class RamaUpdate(BaseModel):
+    tipo: Optional[str] = Field(default=None, pattern="^(masc|fem|mixto)$")
+    nombre_custom: Optional[str] = Field(default=None, max_length=50)
+    activa: Optional[bool] = None
+
+class CategoriaUpdate(BaseModel):
+    nombre: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    formato: Optional[str] = Field(default=None, pattern="^(grupos|eliminatoria|round_robin|custom)$")
+    cuadro_perdedores: Optional[bool] = None
+    equipos_x_grupo: Optional[int] = Field(default=None, ge=2, le=8)
+    sets_x_partido: Optional[int] = None
+    puntos_x_set: Optional[int] = None
+    avance_x_grupo: Optional[int] = Field(default=None, ge=1, le=4)
+    criterio_clasif: Optional[str] = None
+
+    @field_validator("sets_x_partido")
+    @classmethod
+    def check_sets_upd(cls, v):
+        if v is None:
+            return v
+        if v not in (1, 3, 5):
+            raise ValueError("sets_x_partido debe ser 1, 3 o 5")
+        return v
+
+    @field_validator("puntos_x_set")
+    @classmethod
+    def check_puntos_upd(cls, v):
+        if v is None:
+            return v
+        if v not in (15, 21, 25):
+            raise ValueError("puntos_x_set debe ser 15, 21 o 25")
+        return v
+
 class TorneoOut(BaseModel):
     id: str
     nombre: str

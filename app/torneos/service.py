@@ -195,3 +195,106 @@ async def get_public_by_slug(db: AsyncSession, slug: str):
     if not torneo:
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público o no existe", {"slug": slug})
     return torneo
+
+# ---------- Ramas ----------
+async def create_rama(db: AsyncSession, torneo_id: str, data) -> Rama:
+    from app.torneos.schemas import RamaIn
+    assert isinstance(data, RamaIn)
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    if not res.scalar_one_or_none():
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    rama = Rama(torneo_id=torneo_id, tipo=data.tipo, nombre_custom=data.nombre_custom, activa=data.activa)
+    db.add(rama)
+    await db.flush()
+    cats = []
+    for cat_in in data.categorias:
+        if cat_in.sets_x_partido not in (1, 3, 5):
+            raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
+        if cat_in.puntos_x_set not in (15, 21, 25):
+            raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
+        cat = Categoria(rama_id=rama.id, nombre=cat_in.nombre, formato=cat_in.formato, cuadro_perdedores=cat_in.cuadro_perdedores, equipos_x_grupo=cat_in.equipos_x_grupo, sets_x_partido=cat_in.sets_x_partido, puntos_x_set=cat_in.puntos_x_set, avance_x_grupo=cat_in.avance_x_grupo, criterio_clasif=cat_in.criterio_clasif)
+        db.add(cat)
+        await db.flush()
+        cats.append(cat)
+    await db.flush()
+    return rama
+
+async def update_rama(db: AsyncSession, rama_id: str, data) -> Rama:
+    from app.torneos.schemas import RamaUpdate
+    assert isinstance(data, RamaUpdate)
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    rama = res.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    upd = data.model_dump(exclude_unset=True)
+    if "tipo" in upd and upd["tipo"] is not None:
+        rama.tipo = upd["tipo"]
+    if "nombre_custom" in upd:
+        rama.nombre_custom = upd["nombre_custom"].strip() if upd["nombre_custom"] else None
+    if "activa" in upd and upd["activa"] is not None:
+        rama.activa = upd["activa"]
+    await db.flush()
+    return rama
+
+async def delete_rama(db: AsyncSession, rama_id: str):
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    rama = res.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    # check if has categorias with equipos
+    from sqlalchemy import text
+    cnt = await db.execute(text("SELECT count(*) FROM categorias c JOIN equipos e ON e.categoria_id=c.id WHERE c.rama_id=:rid"), {"rid": rama_id})
+    if cnt.scalar() and cnt.scalar() > 0:
+        raise AppError(400, "RAMA_HAS_EQUIPOS", "No se puede eliminar rama con equipos inscritos")
+    await db.delete(rama)
+    await db.flush()
+
+# ---------- Categorias ----------
+async def create_categoria(db: AsyncSession, rama_id: str, data) -> Categoria:
+    from app.torneos.schemas import CategoriaIn
+    assert isinstance(data, CategoriaIn)
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    if not res.scalar_one_or_none():
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    if data.sets_x_partido not in (1, 3, 5):
+        raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
+    if data.puntos_x_set not in (15, 21, 25):
+        raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
+    cat = Categoria(rama_id=rama_id, nombre=data.nombre, formato=data.formato, cuadro_perdedores=data.cuadro_perdedores, equipos_x_grupo=data.equipos_x_grupo, sets_x_partido=data.sets_x_partido, puntos_x_set=data.puntos_x_set, avance_x_grupo=data.avance_x_grupo, criterio_clasif=data.criterio_clasif)
+    db.add(cat)
+    await db.flush()
+    return cat
+
+async def update_categoria(db: AsyncSession, categoria_id: str, data) -> Categoria:
+    from app.torneos.schemas import CategoriaUpdate
+    assert isinstance(data, CategoriaUpdate)
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
+    upd = data.model_dump(exclude_unset=True)
+    for k, v in upd.items():
+        if v is not None:
+            if k == "nombre" and isinstance(v, str):
+                setattr(cat, k, v.strip())
+            else:
+                setattr(cat, k, v)
+    await db.flush()
+    return cat
+
+async def delete_categoria(db: AsyncSession, categoria_id: str):
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
+    from sqlalchemy import text
+    # check equipos
+    cnt = await db.execute(text("SELECT count(*) FROM equipos WHERE categoria_id=:cid"), {"cid": categoria_id})
+    if cnt.scalar() and cnt.scalar() > 0:
+        raise AppError(400, "CATEGORIA_HAS_EQUIPOS", "No se puede eliminar categoría con equipos inscritos")
+    # check partidos
+    cnt2 = await db.execute(text("SELECT count(*) FROM partidos WHERE categoria_id=:cid"), {"cid": categoria_id})
+    if cnt2.scalar() and cnt2.scalar() > 0:
+        raise AppError(400, "CATEGORIA_HAS_PARTIDOS", "No se puede eliminar categoría con partidos generados")
+    await db.delete(cat)
+    await db.flush()

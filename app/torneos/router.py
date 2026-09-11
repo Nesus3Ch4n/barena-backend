@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
-from app.torneos.schemas import TorneoCreate, TorneoUpdate, VisibilidadUpdate
-from app.torneos.service import create_torneo, get_torneo_detail, list_torneos, update_torneo, update_visibilidad, get_public_by_slug
+from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, get_torneo_detail, list_torneos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -74,6 +74,105 @@ async def actualizar_torneo(torneo_id: str, body: TorneoUpdate, request: Request
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_torneo(db, torneo_id, body)
     return {"success": True, "data": {"id": updated.id, "nombre": updated.nombre, "slug": updated.slug, "sede": updated.sede, "ciudad": updated.ciudad, "fecha_inicio": str(updated.fecha_inicio) if updated.fecha_inicio else None, "fecha_fin": str(updated.fecha_fin) if updated.fecha_fin else None, "publico": updated.publico, "estado": updated.estado}, "error": None}
+
+# ---------- Ramas ----------
+@router.post("/{torneo_id}/ramas", status_code=201, response_model=dict)
+async def crear_rama(torneo_id: str, body: RamaIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    if torneo.organizador_id != user.id and not is_super:
+        raise Forbidden("No eres organizador de este torneo")
+    rama = await create_rama(db, torneo_id, body)
+    return {"success": True, "data": {"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "activa": rama.activa}, "error": None}
+
+@router.patch("/ramas/{rama_id}", response_model=dict)
+async def actualizar_rama(rama_id: str, body: RamaUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(rama_id, "rama_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    from app.torneos.models import Rama
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    rama = res.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
+    torneo = res2.scalar_one_or_none()
+    if not torneo or (torneo.organizador_id != user.id and not is_super):
+        raise Forbidden("No eres organizador de este torneo")
+    updated = await update_rama(db, rama_id, body)
+    return {"success": True, "data": {"id": updated.id, "tipo": updated.tipo, "nombre_custom": updated.nombre_custom, "activa": updated.activa}, "error": None}
+
+@router.delete("/ramas/{rama_id}", response_model=dict)
+async def eliminar_rama(rama_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(rama_id, "rama_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    from app.torneos.models import Rama
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    rama = res.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
+    torneo = res2.scalar_one_or_none()
+    if not torneo or (torneo.organizador_id != user.id and not is_super):
+        raise Forbidden("No eres organizador de este torneo")
+    await delete_rama(db, rama_id)
+    return {"success": True, "data": {"deleted": True}, "error": None}
+
+# ---------- Categorias ----------
+@router.post("/ramas/{rama_id}/categorias", status_code=201, response_model=dict)
+async def crear_categoria(rama_id: str, body: CategoriaIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(rama_id, "rama_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    from app.torneos.models import Rama
+    res = await db.execute(select(Rama).where(Rama.id == rama_id))
+    rama = res.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
+    res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
+    torneo = res2.scalar_one_or_none()
+    if not torneo or (torneo.organizador_id != user.id and not is_super):
+        raise Forbidden("No eres organizador de este torneo")
+    cat = await create_categoria(db, rama_id, body)
+    return {"success": True, "data": {"id": cat.id, "nombre": cat.nombre, "formato": cat.formato}, "error": None}
+
+@router.patch("/categorias/{categoria_id}", response_model=dict)
+async def actualizar_categoria(categoria_id: str, body: CategoriaUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(categoria_id, "categoria_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    from app.torneos.models import Categoria, Rama
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
+    res2 = await db.execute(select(Rama).where(Rama.id == cat.rama_id))
+    rama = res2.scalar_one_or_none()
+    res3 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id)) if rama else None
+    torneo = res3.scalar_one_or_none() if res3 else None
+    if not torneo or (torneo.organizador_id != user.id and not is_super):
+        raise Forbidden("No eres organizador de este torneo")
+    updated = await update_categoria(db, categoria_id, body)
+    return {"success": True, "data": {"id": updated.id, "nombre": updated.nombre, "formato": updated.formato, "equipos_x_grupo": updated.equipos_x_grupo}, "error": None}
+
+@router.delete("/categorias/{categoria_id}", response_model=dict)
+async def eliminar_categoria(categoria_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(categoria_id, "categoria_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    from app.torneos.models import Categoria, Rama
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
+    res2 = await db.execute(select(Rama).where(Rama.id == cat.rama_id))
+    rama = res2.scalar_one_or_none()
+    res3 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id)) if rama else None
+    torneo = res3.scalar_one_or_none() if res3 else None
+    if not torneo or (torneo.organizador_id != user.id and not is_super):
+        raise Forbidden("No eres organizador de este torneo")
+    await delete_categoria(db, categoria_id)
+    return {"success": True, "data": {"deleted": True}, "error": None}
 
 @router.patch("/{torneo_id}/publicar-fixture", response_model=dict)
 async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
