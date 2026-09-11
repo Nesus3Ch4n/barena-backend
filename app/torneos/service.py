@@ -148,6 +148,47 @@ async def update_visibilidad(db: AsyncSession, torneo_id: str, data: Visibilidad
     await db.flush()
     return torneo
 
+async def update_torneo(db: AsyncSession, torneo_id: str, data) -> Torneo:
+    from app.torneos.schemas import TorneoUpdate
+    assert isinstance(data, TorneoUpdate)
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    upd = data.model_dump(exclude_unset=True)
+    # fechas
+    fecha_inicio = upd.get("fecha_inicio", torneo.fecha_inicio)
+    fecha_fin = upd.get("fecha_fin", torneo.fecha_fin)
+    if fecha_inicio and fecha_fin and fecha_fin < fecha_inicio:
+        raise AppError(400, "FECHAS_INVALIDAS", "fecha_fin debe ser >= fecha_inicio")
+    if "nombre" in upd and upd["nombre"] is not None:
+        torneo.nombre = upd["nombre"].strip()
+        # regenerar slug si cambia nombre
+        base = slugify(torneo.nombre)
+        slug = base
+        counter = 1
+        while True:
+            q = await db.execute(select(Torneo).where(Torneo.slug == slug, Torneo.id != torneo.id))
+            if not q.scalar_one_or_none():
+                break
+            slug = f"{base}-{counter}"
+            counter += 1
+        torneo.slug = slug
+    if "sede" in upd:
+        torneo.sede = upd["sede"].strip() if upd["sede"] else None
+    if "ciudad" in upd:
+        torneo.ciudad = upd["ciudad"].strip() if upd["ciudad"] else None
+    if "fecha_inicio" in upd:
+        torneo.fecha_inicio = upd["fecha_inicio"]
+    if "fecha_fin" in upd:
+        torneo.fecha_fin = upd["fecha_fin"]
+    if "publico" in upd and upd["publico"] is not None:
+        torneo.publico = upd["publico"]
+    if "deporte_nombre" in upd and upd["deporte_nombre"]:
+        torneo.deporte_id = await get_deporte_id(db, None, upd["deporte_nombre"])
+    await db.flush()
+    return torneo
+
 async def get_public_by_slug(db: AsyncSession, slug: str):
     res = await db.execute(select(Torneo).where(Torneo.slug == slug, Torneo.publico == True))
     torneo = res.scalar_one_or_none()

@@ -59,6 +59,15 @@ class VisibilidadUpdate(BaseModel):
     ranking_visible: Optional[bool] = None
     publico: Optional[bool] = None
 
+class TorneoUpdate(BaseModel):
+    nombre: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    sede: Optional[str] = Field(default=None, max_length=120)
+    ciudad: Optional[str] = Field(default=None, max_length=120)
+    fecha_inicio: Optional[date] = None
+    fecha_fin: Optional[date] = None
+    publico: Optional[bool] = None
+    deporte_nombre: Optional[str] = Field(default=None, max_length=50)
+
 class TorneoOut(BaseModel):
     id: str
     nombre: str

@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
-from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
-from app.torneos.service import create_torneo, get_torneo_detail, list_torneos, update_visibilidad, get_public_by_slug
+from app.torneos.schemas import TorneoCreate, TorneoUpdate, VisibilidadUpdate
+from app.torneos.service import create_torneo, get_torneo_detail, list_torneos, update_torneo, update_visibilidad, get_public_by_slug
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -61,6 +61,19 @@ async def patch_visibilidad(torneo_id: str, body: VisibilidadUpdate, request: Re
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_visibilidad(db, torneo_id, body)
     return {"success": True, "data": {"id": updated.id, "config_visibilidad": updated.config_visibilidad, "publico": updated.publico}, "error": None}
+
+@router.patch("/{torneo_id}", response_model=dict)
+async def actualizar_torneo(torneo_id: str, body: TorneoUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    if torneo.organizador_id != user.id and not is_super:
+        raise Forbidden("No eres organizador de este torneo")
+    updated = await update_torneo(db, torneo_id, body)
+    return {"success": True, "data": {"id": updated.id, "nombre": updated.nombre, "slug": updated.slug, "sede": updated.sede, "ciudad": updated.ciudad, "fecha_inicio": str(updated.fecha_inicio) if updated.fecha_inicio else None, "fecha_fin": str(updated.fecha_fin) if updated.fecha_fin else None, "publico": updated.publico, "estado": updated.estado}, "error": None}
 
 @router.patch("/{torneo_id}/publicar-fixture", response_model=dict)
 async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
