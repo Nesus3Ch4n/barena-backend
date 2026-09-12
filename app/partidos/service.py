@@ -262,3 +262,63 @@ async def get_partido(db: AsyncSession, partido_id: str) -> tuple[Partido, list[
     res2 = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(SetPartido.numero_set))
     sets = res2.scalars().all()
     return partido, sets
+
+async def crear_partido_manual(db: AsyncSession, data: dict) -> Partido:
+    cat_id = data.get("categoria_id")
+    res = await db.execute(select(Categoria).where(Categoria.id == cat_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no existe", {"id": cat_id})
+    # validate equipos belong to same categoria
+    for eid in [data.get("equipo_local_id"), data.get("equipo_visit_id")]:
+        if not eid:
+            raise BadRequest("EQUIPO_REQUERIDO", "Se requieren dos equipos")
+        r = await db.execute(select(Equipo).where(Equipo.id == eid, Equipo.categoria_id == cat_id))
+        if not r.scalar_one_or_none():
+            raise BadRequest("EQUIPO_INVALIDO", f"Equipo {eid} no pertenece a la categoria")
+    if data.get("equipo_local_id") == data.get("equipo_visit_id"):
+        raise BadRequest("EQUIPOS_IGUALES", "Local y visita no pueden ser el mismo")
+    p = Partido(
+        categoria_id=cat_id,
+        grupo_id=data.get("grupo_id"),
+        fase=data.get("fase") or "grupos",
+        equipo_local_id=data["equipo_local_id"],
+        equipo_visit_id=data["equipo_visit_id"],
+        cancha=data.get("cancha"),
+        fecha_hora=data.get("fecha_hora"),
+        bracket_tipo=data.get("bracket_tipo") or "general",
+        estado="pendiente",
+    )
+    db.add(p)
+    await db.flush()
+    return p
+
+async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict) -> Partido:
+    res = await db.execute(select(Partido).where(Partido.id == partido_id))
+    partido = res.scalar_one_or_none()
+    if not partido:
+        raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
+    if partido.estado == "finalizado":
+        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede editar un partido finalizado")
+    for k in ["grupo_id", "fase", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo"]:
+        if k in data and data[k] is not None:
+            setattr(partido, k, data[k])
+    # validate equipos if changed
+    if data.get("equipo_local_id") or data.get("equipo_visit_id"):
+        cat_id = partido.categoria_id
+        for eid in [partido.equipo_local_id, partido.equipo_visit_id]:
+            r = await db.execute(select(Equipo).where(Equipo.id == eid, Equipo.categoria_id == cat_id))
+            if not r.scalar_one_or_none():
+                raise BadRequest("EQUIPO_INVALIDO", "Equipo no pertenece a la categoria")
+    await db.flush()
+    return partido
+
+async def eliminar_partido(db: AsyncSession, partido_id: str):
+    res = await db.execute(select(Partido).where(Partido.id == partido_id))
+    partido = res.scalar_one_or_none()
+    if not partido:
+        raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
+    if partido.estado == "finalizado":
+        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede eliminar un partido finalizado")
+    await db.delete(partido)
+    await db.flush()

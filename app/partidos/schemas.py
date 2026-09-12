@@ -36,3 +36,22 @@ class PartidoOut(BaseModel):
     estado: str
     ganador_id: Optional[str]
     bracket_tipo: str = "general"
+
+class PartidoCreate(BaseModel):
+    categoria_id: str
+    grupo_id: Optional[str] = None
+    fase: str = Field(default="grupos", pattern="^(grupos|cuartos|semi|final|tercer_puesto|octavos|ronda)$")
+    equipo_local_id: str
+    equipo_visit_id: str
+    cancha: Optional[str] = Field(None, max_length=50)
+    fecha_hora: Optional[datetime] = None
+    bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro)$")
+
+class PartidoUpdate(BaseModel):
+    grupo_id: Optional[str] = None
+    fase: Optional[str] = Field(default=None, pattern="^(grupos|cuartos|semi|final|tercer_puesto|octavos|ronda)$")
+    equipo_local_id: Optional[str] = None
+    equipo_visit_id: Optional[str] = None
+    cancha: Optional[str] = Field(None, max_length=50)
+    fecha_hora: Optional[datetime] = None
+    bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro)$")

@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
-from app.partidos.schemas import GenerarFixtureIn, ProgramarIn, ResultadoIn
-from app.partidos.service import generar_fixture, programar_partido, registrar_resultado, list_partidos, get_partido
+from app.partidos.schemas import GenerarFixtureIn, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn
+from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, programar_partido, registrar_resultado, list_partidos, get_partido
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -28,6 +28,14 @@ async def _verify_categoria_owner(db: AsyncSession, categoria_id: str, user_id: 
     torneo = res3.scalar_one_or_none()
     if torneo and torneo.organizador_id != user_id:
         raise Forbidden("No eres organizador de este torneo")
+
+@categoria_fixture_router.get("/grupos", response_model=dict)
+async def listar_grupos_categoria(categoria_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []))
+    from app.torneos.models import Grupo
+    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
+    grupos = res.scalars().all()
+    return {"success": True, "data": [{"id": g.id, "nombre": g.nombre, "orden": g.orden} for g in grupos], "error": None}
 
 @categoria_fixture_router.post("/generar-fixture", response_model=dict)
 async def generar(categoria_id: str, body: GenerarFixtureIn = None, request: Request = None, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
@@ -60,3 +68,25 @@ async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSess
 @router.get("/{partido_id}/qr", response_model=dict)
 async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     return {"success": True, "data": {"qr_url": f"/juez/partido/{partido_id}", "partido_id": partido_id}, "error": None}
+
+@router.patch("/{partido_id}", response_model=dict)
+async def actualizar(partido_id: str, body: PartidoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, (await db.execute(select(Partido.categoria_id).where(Partido.id == partido_id))).scalar_one_or_none() or "", user.id, "super_admin" in getattr(request.state, "roles", []))
+    partido = await actualizar_partido(db, partido_id, body.model_dump(exclude_unset=True))
+    return {"success": True, "data": {"id": partido.id, "grupo_id": partido.grupo_id, "fase": partido.fase, "bracket_tipo": partido.bracket_tipo}, "error": None}
+
+@router.delete("/{partido_id}", response_model=dict)
+async def eliminar(partido_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    # verify owner via partido -> categoria
+    res = await db.execute(select(Partido.categoria_id).where(Partido.id == partido_id))
+    cat_id = res.scalar_one_or_none()
+    if cat_id:
+        await _verify_categoria_owner(db, cat_id, user.id, "super_admin" in getattr(request.state, "roles", []))
+    await eliminar_partido(db, partido_id)
+    return {"success": True, "data": {"deleted": True}, "error": None}
+
+@categoria_fixture_router.post("/partidos", status_code=201, response_model=dict)
+async def crear_manual(categoria_id: str, body: PartidoCreate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []))
+    partido = await crear_partido_manual(db, body.model_dump())
+    return {"success": True, "data": {"id": partido.id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id}, "error": None}

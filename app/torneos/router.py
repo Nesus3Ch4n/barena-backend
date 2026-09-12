@@ -174,6 +174,8 @@ async def eliminar_categoria(categoria_id: str, request: Request, user=Depends(g
     await delete_categoria(db, categoria_id)
     return {"success": True, "data": {"deleted": True}, "error": None}
 
+
+
 @router.patch("/{torneo_id}/publicar-fixture", response_model=dict)
 async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # shortcut to set fixture_visible true
