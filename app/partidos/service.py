@@ -148,9 +148,9 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
             if s["pts_local"] == s["pts_visitante"]:
                 raise AppError(400, "SET_EMPATE", "Set no puede empatar")
             if winner_pts < cat.puntos_x_set:
-                raise AppError(400, "PTS_INSUFICIENTES", f"Set requiere mínimo {cat.puntos_x_set} puntos")
+                raise AppError(400, "PTS_INSUFICIENTES", f"Set {s['numero_set']} requiere mínimo {cat.puntos_x_set} puntos")
             if getattr(cat, "diferencia_dos_puntos", True) and winner_pts - loser_pts < 2:
-                raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
+                raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']} a {cat.puntos_x_set} requiere ventaja de 2 (ej. 15-14 no termina, 17-15 sí)")
         # Upsert
         for s in sets:
             ganador = partido.equipo_local_id if s["pts_local"] > s["pts_visitante"] else partido.equipo_visit_id
@@ -197,16 +197,23 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     if sorted(numeros) != list(range(1, len(sets) + 1)):
         raise AppError(400, "NUMERO_SET_INVALIDO", "Los sets deben ser numerados secuencialmente desde 1")
 
-    # Validate pts >= 15/21/25 and difference >= 2 (si exige)
+    # Validate pts >= 15/21/25 and diferencia de 2 (según termino voleibol)
+    # En voleibol, el set decisivo (último) se juega a 15 si el formato es a 3 o 5 sets
+    def _puntos_requeridos(num_set: int) -> int:
+        # Si es el set decisivo y formato es mejor de 3 o 5, el último set es a 15
+        if cat.sets_x_partido in (3, 5) and num_set == cat.sets_x_partido:
+            return 15
+        return cat.puntos_x_set
     for s in sets:
+        req = _puntos_requeridos(s["numero_set"])
         winner_pts = max(s["pts_local"], s["pts_visitante"])
         loser_pts = min(s["pts_local"], s["pts_visitante"])
         if s["pts_local"] == s["pts_visitante"]:
             raise AppError(400, "SET_EMPATE", "Set no puede empatar")
-        if winner_pts < cat.puntos_x_set:
-            raise AppError(400, "PTS_INSUFICIENTES", f"Set requiere mínimo {cat.puntos_x_set} puntos")
+        if winner_pts < req:
+            raise AppError(400, "PTS_INSUFICIENTES", f"Set {s['numero_set']} requiere mínimo {req} puntos (diferencia de 2: ej. {req}-{req-1} no alcanza, necesita {req+2}-{req})")
         if getattr(cat, "diferencia_dos_puntos", True) and winner_pts - loser_pts < 2:
-            raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
+            raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']} a {req} requiere ventaja de 2 (ej. 25-24 no termina, 27-25 sí; 15-14 no termina, 17-15 sí)")
 
     # Upsert sets (don't delete history)
     for s in sets:
