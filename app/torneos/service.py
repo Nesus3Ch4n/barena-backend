@@ -126,9 +126,9 @@ async def get_torneo_detail(db: AsyncSession, torneo_id: str, current_user_id: s
         result.append((rama, cats))
     return {"torneo": torneo, "ramas": result}
 
-async def list_torneos(db: AsyncSession, user_id: str, is_super: bool):
+async def list_torneos(db: AsyncSession, user_id: str, is_super: bool, is_org: bool = False):
     from sqlalchemy import or_
-    if is_super:
+    if is_super or is_org:
         res = await db.execute(select(Torneo).order_by(Torneo.creado_en.desc()))
     else:
         res = await db.execute(select(Torneo).where(or_(Torneo.organizador_id == user_id, Torneo.publico == True)).order_by(Torneo.creado_en.desc()))
@@ -197,6 +197,14 @@ async def get_public_by_slug(db: AsyncSession, slug: str):
     if not torneo:
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público o no existe", {"slug": slug})
     return torneo
+
+async def delete_torneo(db: AsyncSession, torneo_id: str):
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    await db.delete(torneo)
+    await db.flush()
 
 # ---------- Ramas ----------
 async def create_rama(db: AsyncSession, torneo_id: str, data) -> Rama:

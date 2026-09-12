@@ -6,7 +6,7 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, get_torneo_detail, list_torneos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -27,7 +27,8 @@ async def crear_torneo(body: TorneoCreate, request: Request, user=Depends(get_cu
 @router.get("", response_model=dict)
 async def listar_torneos(request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     is_super = "super_admin" in getattr(request.state, "roles", [])
-    torneos = await list_torneos(db, user.id, is_super)
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    torneos = await list_torneos(db, user.id, is_super, is_org)
     data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad} for t in torneos]
     return {"success": True, "data": data, "error": None}
 
@@ -36,13 +37,15 @@ async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_curr
     _validate_uuid(torneo_id, "torneo_id")
     # check ownership via RLS-like logic
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     # fetch
     result = await get_torneo_detail(db, torneo_id)
     torneo = result["torneo"]
-    if torneo.organizador_id != user.id and not is_super:
+    if torneo.organizador_id != user.id and not is_super and not is_org:
         # allow if public? detail should be allowed for public even if not owner
         if not torneo.publico:
             raise Forbidden("No tienes permiso para ver este torneo")
+    # organizador puede ver cualquier torneo (público o privado) para editar
     ramas_data = []
     for rama, cats in result["ramas"]:
         ramas_data.append({"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "ranking_general_enabled": getattr(c, "ranking_general_enabled", True), "bracket_tipo": getattr(c, "bracket_tipo", "general")} for c in cats]})
@@ -52,12 +55,13 @@ async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_curr
 async def patch_visibilidad(torneo_id: str, body: VisibilidadUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
-    # verify owner
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    # verify owner - cualquier organizador puede editar
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()
     if not torneo:
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
-    if torneo.organizador_id != user.id and not is_super:
+    if not is_super and not is_org:
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_visibilidad(db, torneo_id, body)
     return {"success": True, "data": {"id": updated.id, "config_visibilidad": updated.config_visibilidad, "publico": updated.publico}, "error": None}
@@ -66,25 +70,41 @@ async def patch_visibilidad(torneo_id: str, body: VisibilidadUpdate, request: Re
 async def actualizar_torneo(torneo_id: str, body: TorneoUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()
     if not torneo:
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
-    if torneo.organizador_id != user.id and not is_super:
+    if not is_super and not is_org:
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_torneo(db, torneo_id, body)
     return {"success": True, "data": {"id": updated.id, "nombre": updated.nombre, "slug": updated.slug, "sede": updated.sede, "ciudad": updated.ciudad, "fecha_inicio": str(updated.fecha_inicio) if updated.fecha_inicio else None, "fecha_fin": str(updated.fecha_fin) if updated.fecha_fin else None, "publico": updated.publico, "estado": updated.estado}, "error": None}
+
+@router.delete("/{torneo_id}", response_model=dict)
+async def eliminar_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    if not is_super and not is_org:
+        raise Forbidden("No eres organizador")
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    await delete_torneo(db, torneo_id)
+    return {"success": True, "data": {"deleted": True}, "error": None}
 
 # ---------- Ramas ----------
 @router.post("/{torneo_id}/ramas", status_code=201, response_model=dict)
 async def crear_rama(torneo_id: str, body: RamaIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()
     if not torneo:
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
-    if torneo.organizador_id != user.id and not is_super:
+    if not is_super and not is_org:
         raise Forbidden("No eres organizador de este torneo")
     rama = await create_rama(db, torneo_id, body)
     return {"success": True, "data": {"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "activa": rama.activa}, "error": None}
@@ -93,6 +113,7 @@ async def crear_rama(torneo_id: str, body: RamaIn, request: Request, user=Depend
 async def actualizar_rama(rama_id: str, body: RamaUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(rama_id, "rama_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     from app.torneos.models import Rama
     res = await db.execute(select(Rama).where(Rama.id == rama_id))
     rama = res.scalar_one_or_none()
@@ -100,7 +121,7 @@ async def actualizar_rama(rama_id: str, body: RamaUpdate, request: Request, user
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
     res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
     torneo = res2.scalar_one_or_none()
-    if not torneo or (torneo.organizador_id != user.id and not is_super):
+    if not torneo or (not is_super and not is_org):
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_rama(db, rama_id, body)
     return {"success": True, "data": {"id": updated.id, "tipo": updated.tipo, "nombre_custom": updated.nombre_custom, "activa": updated.activa}, "error": None}
@@ -109,6 +130,7 @@ async def actualizar_rama(rama_id: str, body: RamaUpdate, request: Request, user
 async def eliminar_rama(rama_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(rama_id, "rama_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     from app.torneos.models import Rama
     res = await db.execute(select(Rama).where(Rama.id == rama_id))
     rama = res.scalar_one_or_none()
@@ -116,7 +138,7 @@ async def eliminar_rama(rama_id: str, request: Request, user=Depends(get_current
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
     res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
     torneo = res2.scalar_one_or_none()
-    if not torneo or (torneo.organizador_id != user.id and not is_super):
+    if not torneo or (not is_super and not is_org):
         raise Forbidden("No eres organizador de este torneo")
     await delete_rama(db, rama_id)
     return {"success": True, "data": {"deleted": True}, "error": None}
@@ -126,6 +148,7 @@ async def eliminar_rama(rama_id: str, request: Request, user=Depends(get_current
 async def crear_categoria(rama_id: str, body: CategoriaIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(rama_id, "rama_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     from app.torneos.models import Rama
     res = await db.execute(select(Rama).where(Rama.id == rama_id))
     rama = res.scalar_one_or_none()
@@ -133,7 +156,7 @@ async def crear_categoria(rama_id: str, body: CategoriaIn, request: Request, use
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
     res2 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
     torneo = res2.scalar_one_or_none()
-    if not torneo or (torneo.organizador_id != user.id and not is_super):
+    if not torneo or (not is_super and not is_org):
         raise Forbidden("No eres organizador de este torneo")
     cat = await create_categoria(db, rama_id, body)
     return {"success": True, "data": {"id": cat.id, "nombre": cat.nombre, "formato": cat.formato}, "error": None}
@@ -142,6 +165,7 @@ async def crear_categoria(rama_id: str, body: CategoriaIn, request: Request, use
 async def actualizar_categoria(categoria_id: str, body: CategoriaUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(categoria_id, "categoria_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     from app.torneos.models import Categoria, Rama
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
@@ -151,7 +175,7 @@ async def actualizar_categoria(categoria_id: str, body: CategoriaUpdate, request
     rama = res2.scalar_one_or_none()
     res3 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id)) if rama else None
     torneo = res3.scalar_one_or_none() if res3 else None
-    if not torneo or (torneo.organizador_id != user.id and not is_super):
+    if not torneo or (not is_super and not is_org):
         raise Forbidden("No eres organizador de este torneo")
     updated = await update_categoria(db, categoria_id, body)
     return {"success": True, "data": {"id": updated.id, "nombre": updated.nombre, "formato": updated.formato, "equipos_x_grupo": updated.equipos_x_grupo}, "error": None}
@@ -160,6 +184,7 @@ async def actualizar_categoria(categoria_id: str, body: CategoriaUpdate, request
 async def eliminar_categoria(categoria_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(categoria_id, "categoria_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
     from app.torneos.models import Categoria, Rama
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
@@ -169,7 +194,7 @@ async def eliminar_categoria(categoria_id: str, request: Request, user=Depends(g
     rama = res2.scalar_one_or_none()
     res3 = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id)) if rama else None
     torneo = res3.scalar_one_or_none() if res3 else None
-    if not torneo or (torneo.organizador_id != user.id and not is_super):
+    if not torneo or (not is_super and not is_org):
         raise Forbidden("No eres organizador de este torneo")
     await delete_categoria(db, categoria_id)
     return {"success": True, "data": {"deleted": True}, "error": None}
