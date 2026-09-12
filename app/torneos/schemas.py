@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Any
-from datetime import date
+from datetime import date, datetime
 
 class CategoriaIn(BaseModel):
     nombre: str = Field(min_length=1, max_length=50)
@@ -59,8 +59,8 @@ class TorneoCreate(BaseModel):
     nombre: str = Field(min_length=2, max_length=120)
     deporte_id: Optional[str] = None
     deporte_nombre: Optional[str] = "volei_playa"
-    fecha_inicio: Optional[date] = None
-    fecha_fin: Optional[date] = None
+    fecha_inicio: Optional[datetime] = None
+    fecha_fin: Optional[datetime] = None
     sede: Optional[str] = None
     ciudad: Optional[str] = None
     publico: bool = False
@@ -83,8 +83,8 @@ class TorneoUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=2, max_length=120)
     sede: Optional[str] = Field(default=None, max_length=120)
     ciudad: Optional[str] = Field(default=None, max_length=120)
-    fecha_inicio: Optional[date] = None
-    fecha_fin: Optional[date] = None
+    fecha_inicio: Optional[datetime] = None
+    fecha_fin: Optional[datetime] = None
     publico: Optional[bool] = None
     deporte_nombre: Optional[str] = Field(default=None, max_length=50)
 
@@ -139,8 +139,8 @@ class TorneoOut(BaseModel):
     slug: str
     deporte_id: str
     organizador_id: str
-    fecha_inicio: Optional[date]
-    fecha_fin: Optional[date]
+    fecha_inicio: Optional[datetime]
+    fecha_fin: Optional[datetime]
     sede: Optional[str]
     ciudad: Optional[str]
     estado: str
