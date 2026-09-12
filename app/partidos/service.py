@@ -149,7 +149,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
                 raise AppError(400, "SET_EMPATE", "Set no puede empatar")
             if winner_pts < cat.puntos_x_set:
                 raise AppError(400, "PTS_INSUFICIENTES", f"Set requiere mínimo {cat.puntos_x_set} puntos")
-            if winner_pts - loser_pts < 2:
+            if getattr(cat, "diferencia_dos_puntos", True) and winner_pts - loser_pts < 2:
                 raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
         # Upsert
         for s in sets:
@@ -197,7 +197,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
     if sorted(numeros) != list(range(1, len(sets) + 1)):
         raise AppError(400, "NUMERO_SET_INVALIDO", "Los sets deben ser numerados secuencialmente desde 1")
 
-    # Validate pts >= 15/21/25 and difference >= 2
+    # Validate pts >= 15/21/25 and difference >= 2 (si exige)
     for s in sets:
         winner_pts = max(s["pts_local"], s["pts_visitante"])
         loser_pts = min(s["pts_local"], s["pts_visitante"])
@@ -205,7 +205,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
             raise AppError(400, "SET_EMPATE", "Set no puede empatar")
         if winner_pts < cat.puntos_x_set:
             raise AppError(400, "PTS_INSUFICIENTES", f"Set requiere mínimo {cat.puntos_x_set} puntos")
-        if winner_pts - loser_pts < 2:
+        if getattr(cat, "diferencia_dos_puntos", True) and winner_pts - loser_pts < 2:
             raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
 
     # Upsert sets (don't delete history)

@@ -50,6 +50,7 @@ class Categoria(Base):
     criterio_clasif: Mapped[str] = mapped_column(String(200), default="PG>SF>PF>DP")
     ranking_general_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
+    diferencia_dos_puntos: Mapped[bool] = mapped_column(Boolean, default=True)
 
 class Grupo(Base):
     __tablename__ = "grupos"

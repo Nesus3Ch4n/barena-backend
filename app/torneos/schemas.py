@@ -13,6 +13,7 @@ class CategoriaIn(BaseModel):
     criterio_clasif: str = Field(default="PG>SF>PF>DP", max_length=200)
     ranking_general_enabled: bool = True
     bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro|diamante_oro)$")
+    diferencia_dos_puntos: bool = True
 
     @field_validator("sets_x_partido")
     @classmethod
@@ -104,6 +105,7 @@ class CategoriaUpdate(BaseModel):
     criterio_clasif: Optional[str] = None
     ranking_general_enabled: Optional[bool] = None
     bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro|diamante_oro)$")
+    diferencia_dos_puntos: Optional[bool] = None
 
     @field_validator("sets_x_partido")
     @classmethod
@@ -166,3 +168,4 @@ class CategoriaOut(BaseModel):
     avance_x_grupo: int
     ranking_general_enabled: bool
     bracket_tipo: str
+    diferencia_dos_puntos: bool
