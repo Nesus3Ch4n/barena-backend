@@ -43,6 +43,12 @@ async def generar(categoria_id: str, body: GenerarFixtureIn = None, request: Req
     partidos = await generar_fixture(db, categoria_id, body.bracket_tipo if body else None)
     return {"success": True, "data": {"generados": len(partidos), "partidos": [{"id": p.id, "grupo_id": p.grupo_id, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
 
+@categoria_fixture_router.post("/avanzar-bracket", response_model=dict)
+async def avanzar_bracket(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []))
+    partidos = await generar_bracket_desde_ranking(db, categoria_id)
+    return {"success": True, "data": {"generados": len(partidos), "partidos": [{"id": p.id, "fase": p.fase, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
+
 @torneo_partidos_router.get("", response_model=dict)
 async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     partidos = await list_partidos(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)

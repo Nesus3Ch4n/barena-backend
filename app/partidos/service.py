@@ -100,6 +100,70 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
     await db.flush()
     return partidos_creados
 
+async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no existe", {"id": categoria_id})
+    # obtener grupos
+    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
+    grupos = res.scalars().all()
+    if not grupos:
+        raise AppError(400, "SIN_GRUPOS", "No hay grupos en la categoria")
+    # obtener ranking por grupo
+    from app.rankings.models import RankingGrupo
+    clasificados = []
+    for grupo in grupos:
+        res = await db.execute(select(RankingGrupo).where(RankingGrupo.grupo_id == grupo.id).order_by(RankingGrupo.posicion))
+        ranks = res.scalars().all()
+        # tomar avance_x_grupo primeros
+        top = ranks[: cat.avance_x_grupo]
+        for r in top:
+            # buscar equipo
+            eq_res = await db.execute(select(Equipo).where(Equipo.id == r.equipo_id))
+            eq = eq_res.scalar_one_or_none()
+            if eq:
+                clasificados.append(eq)
+    if len(clasificados) < 2:
+        raise AppError(400, "CLASIFICADOS_INSUFICIENTES", "Se necesitan al menos 2 clasificados", {"count": len(clasificados)})
+    # potencia de 2
+    n = len(clasificados)
+    if n & (n - 1) != 0:
+        # no es potencia de 2, ajustar al siguiente potencia de 2 con byes o error
+        # para simplificar, si no es potencia de 2, crear bracket con los que hay, el siguiente número de potencia de 2 determinará fase
+        pass
+    # ordenar por posicion y criterios (ya viene ordenado por ranking, pero mezclamos grupos)
+    # Para diamante/oro, dividir
+    efectivo_bracket = getattr(cat, "bracket_tipo", "general") or "general"
+    partidos_creados = []
+    # borrar pendientes de fases eliminatorias previas
+    await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(["cuartos", "semi", "final", "tercer_puesto"]), Partido.estado == "pendiente"))
+    def _crear_bracket(eqs, btype):
+        # ordenar por seed o ranking (ya vienen por ranking, pero para diamante/oro usamos ranking general)
+        # 1 vs ultimo
+        m = len(eqs)
+        fase = "cuartos" if m > 4 else "semi" if m > 2 else "final"
+        for i in range(m // 2):
+            a = eqs[i]
+            b = eqs[m - 1 - i]
+            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype)
+            db.add(p)
+            partidos_creados.append(p)
+    if efectivo_bracket == "diamante_oro":
+        mid = (len(clasificados) + 1) // 2
+        _crear_bracket(clasificados[:mid], "diamante")
+        _crear_bracket(clasificados[mid:], "oro")
+    elif efectivo_bracket == "diamante":
+        mid = (len(clasificados) + 1) // 2
+        _crear_bracket(clasificados[:mid], "diamante")
+    elif efectivo_bracket == "oro":
+        mid = (len(clasificados) + 1) // 2
+        _crear_bracket(clasificados[mid:], "oro")
+    else:
+        _crear_bracket(clasificados, "general")
+    await db.flush()
+    return partidos_creados
+
 async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = None, fecha_hora=None, is_organizador: bool = False) -> Partido:
     from uuid import UUID as _UUID
     try:
