@@ -81,9 +81,9 @@ async def create_torneo(db: AsyncSession, user_id: str, data: TorneoCreate) -> d
         await db.flush()
         cats = []
         for cat_in in rama_in.categorias:
-            # validate sets_x_partido
-            if cat_in.sets_x_partido not in (1,3,5):
-                raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
+            # validate sets_x_partido - permite 2 sets con punto de oro
+            if cat_in.sets_x_partido not in (1, 2, 3, 5):
+                raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1, 2, 3 o 5")
             if cat_in.puntos_x_set not in (15,21,25):
                 raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
             cat = Categoria(
@@ -210,11 +210,11 @@ async def create_rama(db: AsyncSession, torneo_id: str, data) -> Rama:
     await db.flush()
     cats = []
     for cat_in in data.categorias:
-        if cat_in.sets_x_partido not in (1, 3, 5):
-            raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
+        if cat_in.sets_x_partido not in (1, 2, 3, 5):
+            raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1, 2, 3 o 5")
         if cat_in.puntos_x_set not in (15, 21, 25):
             raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
-        cat = Categoria(rama_id=rama.id, nombre=cat_in.nombre, formato=cat_in.formato, cuadro_perdedores=cat_in.cuadro_perdedores, equipos_x_grupo=cat_in.equipos_x_grupo, sets_x_partido=cat_in.sets_x_partido, puntos_x_set=cat_in.puntos_x_set, avance_x_grupo=cat_in.avance_x_grupo, criterio_clasif=cat_in.criterio_clasif)
+        cat = Categoria(rama_id=rama.id, nombre=cat_in.nombre, formato=cat_in.formato, cuadro_perdedores=cat_in.cuadro_perdedores, equipos_x_grupo=cat_in.equipos_x_grupo, sets_x_partido=cat_in.sets_x_partido, puntos_x_set=cat_in.puntos_x_set, avance_x_grupo=cat_in.avance_x_grupo, criterio_clasif=cat_in.criterio_clasif, ranking_general_enabled=cat_in.ranking_general_enabled, bracket_tipo=cat_in.bracket_tipo)
         db.add(cat)
         await db.flush()
         cats.append(cat)
@@ -258,8 +258,8 @@ async def create_categoria(db: AsyncSession, rama_id: str, data) -> Categoria:
     res = await db.execute(select(Rama).where(Rama.id == rama_id))
     if not res.scalar_one_or_none():
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
-    if data.sets_x_partido not in (1, 3, 5):
-        raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
+    if data.sets_x_partido not in (1, 2, 3, 5):
+        raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1, 2, 3 o 5")
     if data.puntos_x_set not in (15, 21, 25):
         raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
     cat = Categoria(rama_id=rama_id, nombre=data.nombre, formato=data.formato, cuadro_perdedores=data.cuadro_perdedores, equipos_x_grupo=data.equipos_x_grupo, sets_x_partido=data.sets_x_partido, puntos_x_set=data.puntos_x_set, avance_x_grupo=data.avance_x_grupo, criterio_clasif=data.criterio_clasif, ranking_general_enabled=data.ranking_general_enabled, bracket_tipo=data.bracket_tipo)
