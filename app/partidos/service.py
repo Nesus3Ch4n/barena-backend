@@ -6,7 +6,7 @@ from app.torneos.models import Categoria, Grupo
 from app.equipos.models import Equipo
 from app.shared.errors import AppError, NotFound, BadRequest
 
-async def generar_fixture(db: AsyncSession, categoria_id: str) -> list[Partido]:
+async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str = None) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
     if not cat:
@@ -17,9 +17,25 @@ async def generar_fixture(db: AsyncSession, categoria_id: str) -> list[Partido]:
     if len(equipos) < 2:
         raise AppError(400, "EQUIPOS_INSUFICIENTES", "Se necesitan al menos 2 equipos aprobados", {"count": len(equipos)})
 
+    # bracket_tipo override or from categoria
+    efectivo_bracket = bracket_tipo or getattr(cat, "bracket_tipo", "general") or "general"
+    if efectivo_bracket not in ("general", "diamante", "oro", "diamante_oro"):
+        efectivo_bracket = "general"
+
     await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.estado == "pendiente"))
 
     partidos_creados = []
+
+    def _pair_and_create(eqs_sorted, btype):
+        # 1 vs last, 2 vs penultimo...
+        n = len(eqs_sorted)
+        fase = "cuartos" if n > 4 else "semi" if n > 2 else "final"
+        for i in range(n // 2):
+            a = eqs_sorted[i]
+            b = eqs_sorted[n - 1 - i]
+            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype)
+            db.add(p)
+            partidos_creados.append(p)
 
     if cat.formato in ("grupos", "round_robin"):
         n = cat.equipos_x_grupo
@@ -49,7 +65,7 @@ async def generar_fixture(db: AsyncSession, categoria_id: str) -> list[Partido]:
             res = await db.execute(select(Equipo).where(Equipo.grupo_id == grupo.id))
             eqs = res.scalars().all()
             for a, b in itertools.combinations(eqs, 2):
-                p = Partido(categoria_id=categoria_id, grupo_id=grupo.id, fase="grupos", equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente")
+                p = Partido(categoria_id=categoria_id, grupo_id=grupo.id, fase="grupos", equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo="general")
                 db.add(p)
                 partidos_creados.append(p)
         await db.flush()
@@ -58,12 +74,27 @@ async def generar_fixture(db: AsyncSession, categoria_id: str) -> list[Partido]:
         if len(equipos) % 2 != 0:
             raise AppError(400, "EQUIPOS_IMPAR", "Formato eliminatoria requiere número par de equipos", {"count": len(equipos)})
         equipos_sorted = sorted(equipos, key=lambda e: e.seed or 999)
-        for i in range(0, len(equipos_sorted), 2):
-            a = equipos_sorted[i]
-            b = equipos_sorted[i+1]
-            p = Partido(categoria_id=categoria_id, fase="cuartos" if len(equipos) > 4 else "semi", equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente")
-            db.add(p)
-            partidos_creados.append(p)
+        # diamante/oro split
+        if efectivo_bracket == "diamante_oro":
+            mid = (len(equipos_sorted) + 1) // 2
+            diamante = equipos_sorted[:mid]
+            oro = equipos_sorted[mid:]
+            _pair_and_create(diamante, "diamante")
+            _pair_and_create(oro, "oro")
+        elif efectivo_bracket == "diamante":
+            mid = (len(equipos_sorted) + 1) // 2
+            diamante = equipos_sorted[:mid]
+            if len(diamante) % 2 != 0:
+                raise AppError(400, "EQUIPOS_IMPAR", "Diamante requiere número par", {"count": len(diamante)})
+            _pair_and_create(diamante, "diamante")
+        elif efectivo_bracket == "oro":
+            mid = (len(equipos_sorted) + 1) // 2
+            oro = equipos_sorted[mid:]
+            if len(oro) % 2 != 0:
+                raise AppError(400, "EQUIPOS_IMPAR", "Oro requiere número par", {"count": len(oro)})
+            _pair_and_create(oro, "oro")
+        else:  # general
+            _pair_and_create(equipos_sorted, "general")
         await db.flush()
 
     await db.flush()
@@ -155,7 +186,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
     await db.flush()
     return partido
 
-async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: str = None, grupo_id: str = None, fase: str = None):
+async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None):
     query = select(Partido)
     if categoria_id:
         query = query.where(Partido.categoria_id == categoria_id)
@@ -166,6 +197,8 @@ async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: s
         query = query.where(Partido.grupo_id == grupo_id)
     if fase:
         query = query.where(Partido.fase == fase)
+    if bracket_tipo:
+        query = query.where(Partido.bracket_tipo == bracket_tipo)
     query = query.order_by(Partido.fecha_hora)
     res = await db.execute(query)
     return res.scalars().all()

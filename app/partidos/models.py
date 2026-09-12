@@ -18,6 +18,7 @@ class Partido(Base):
     estado: Mapped[str] = mapped_column(String(20), default="pendiente", nullable=False)
     ganador_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=True)
     es_cuadro_perdedores: Mapped[bool] = mapped_column(Boolean, default=False)
+    bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
     arbitro_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 class SetPartido(Base):

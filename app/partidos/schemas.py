@@ -4,6 +4,7 @@ from datetime import datetime
 
 class GenerarFixtureIn(BaseModel):
     crear_grupos: bool = True
+    bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro|diamante_oro)$")
 
 class ProgramarIn(BaseModel):
     cancha: Optional[str] = Field(None, max_length=50)
@@ -34,3 +35,4 @@ class PartidoOut(BaseModel):
     fecha_hora: Optional[datetime]
     estado: str
     ganador_id: Optional[str]
+    bracket_tipo: str = "general"

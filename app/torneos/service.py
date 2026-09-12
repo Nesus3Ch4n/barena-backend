@@ -96,6 +96,8 @@ async def create_torneo(db: AsyncSession, user_id: str, data: TorneoCreate) -> d
                 puntos_x_set=cat_in.puntos_x_set,
                 avance_x_grupo=cat_in.avance_x_grupo,
                 criterio_clasif=cat_in.criterio_clasif,
+                ranking_general_enabled=cat_in.ranking_general_enabled,
+                bracket_tipo=cat_in.bracket_tipo,
             )
             db.add(cat)
             await db.flush()
@@ -260,7 +262,7 @@ async def create_categoria(db: AsyncSession, rama_id: str, data) -> Categoria:
         raise AppError(400, "SETS_INVALIDO", "sets_x_partido debe ser 1,3,5")
     if data.puntos_x_set not in (15, 21, 25):
         raise AppError(400, "PUNTOS_INVALIDO", "puntos_x_set debe ser 15,21,25")
-    cat = Categoria(rama_id=rama_id, nombre=data.nombre, formato=data.formato, cuadro_perdedores=data.cuadro_perdedores, equipos_x_grupo=data.equipos_x_grupo, sets_x_partido=data.sets_x_partido, puntos_x_set=data.puntos_x_set, avance_x_grupo=data.avance_x_grupo, criterio_clasif=data.criterio_clasif)
+    cat = Categoria(rama_id=rama_id, nombre=data.nombre, formato=data.formato, cuadro_perdedores=data.cuadro_perdedores, equipos_x_grupo=data.equipos_x_grupo, sets_x_partido=data.sets_x_partido, puntos_x_set=data.puntos_x_set, avance_x_grupo=data.avance_x_grupo, criterio_clasif=data.criterio_clasif, ranking_general_enabled=data.ranking_general_enabled, bracket_tipo=data.bracket_tipo)
     db.add(cat)
     await db.flush()
     return cat

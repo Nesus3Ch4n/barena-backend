@@ -48,6 +48,8 @@ class Categoria(Base):
     puntos_x_set: Mapped[int] = mapped_column(Integer, default=21)
     avance_x_grupo: Mapped[int] = mapped_column(Integer, default=2)
     criterio_clasif: Mapped[str] = mapped_column(String(20), default="V>S>P>DP")
+    ranking_general_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
 
 class Grupo(Base):
     __tablename__ = "grupos"
