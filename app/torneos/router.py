@@ -48,7 +48,7 @@ async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_curr
     # organizador puede ver cualquier torneo (público o privado) para editar
     ramas_data = []
     for rama, cats in result["ramas"]:
-        ramas_data.append({"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "ranking_general_enabled": getattr(c, "ranking_general_enabled", True), "bracket_tipo": getattr(c, "bracket_tipo", "general")} for c in cats]})
+        ramas_data.append({"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "ranking_general_enabled": getattr(c, "ranking_general_enabled", True), "bracket_tipo": getattr(c, "bracket_tipo", "general"), "diferencia_dos_puntos": getattr(c, "diferencia_dos_puntos", True), "sets_x_partido": c.sets_x_partido, "puntos_x_set": c.puntos_x_set, "criterio_clasif": getattr(c, "criterio_clasif", "PG>SF>PF>DP")} for c in cats]})
     return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "deporte_id": torneo.deporte_id, "organizador_id": torneo.organizador_id, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "sede": torneo.sede, "ciudad": torneo.ciudad, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad}, "ramas": ramas_data}, "error": None}
 
 @router.patch("/{torneo_id}/visibilidad", response_model=dict)
