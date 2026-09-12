@@ -134,6 +134,58 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no encontrada")
 
+    # 2-set special: punto de oro / diferencia
+    if cat.sets_x_partido == 2:
+        if len(sets) != 2:
+            raise AppError(400, "SETS_INVALIDOS", "Formato 2 sets requiere exactamente 2 sets")
+        # Validate sequential and points
+        numeros = [s["numero_set"] for s in sets]
+        if sorted(numeros) != [1, 2]:
+            raise AppError(400, "NUMERO_SET_INVALIDO", "Sets deben ser 1 y 2")
+        for s in sets:
+            winner_pts = max(s["pts_local"], s["pts_visitante"])
+            loser_pts = min(s["pts_local"], s["pts_visitante"])
+            if s["pts_local"] == s["pts_visitante"]:
+                raise AppError(400, "SET_EMPATE", "Set no puede empatar")
+            if winner_pts < cat.puntos_x_set:
+                raise AppError(400, "PTS_INSUFICIENTES", f"Set requiere mínimo {cat.puntos_x_set} puntos")
+            if winner_pts - loser_pts < 2:
+                raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
+        # Upsert
+        for s in sets:
+            ganador = partido.equipo_local_id if s["pts_local"] > s["pts_visitante"] else partido.equipo_visit_id
+            res3 = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id, SetPartido.numero_set == s["numero_set"]))
+            existing = res3.scalar_one_or_none()
+            if existing:
+                existing.pts_local = s["pts_local"]
+                existing.pts_visitante = s["pts_visitante"]
+                existing.ganador_id = ganador
+                existing.duracion_min = s.get("duracion_min")
+            else:
+                sp = SetPartido(partido_id=partido_id, numero_set=s["numero_set"], pts_local=s["pts_local"], pts_visitante=s["pts_visitante"], ganador_id=ganador, duracion_min=s.get("duracion_min"))
+                db.add(sp)
+        wins_local = sum(1 for s in sets if s["pts_local"] > s["pts_visitante"])
+        wins_visit = 2 - wins_local
+        total_local = sum(s["pts_local"] for s in sets)
+        total_visit = sum(s["pts_visitante"] for s in sets)
+        if wins_local == 2:
+            partido.ganador_id = partido.equipo_local_id
+        elif wins_visit == 2:
+            partido.ganador_id = partido.equipo_visit_id
+        elif wins_local == 1 and wins_visit == 1:
+            if total_local > total_visit:
+                partido.ganador_id = partido.equipo_local_id
+            elif total_visit > total_local:
+                partido.ganador_id = partido.equipo_visit_id
+            else:
+                # punto de oro / empate: sin ganador, ambos 2 pts
+                partido.ganador_id = None
+        else:
+            raise AppError(400, "SETS_INVALIDOS", "Estado inválido para 2 sets")
+        partido.estado = "finalizado"
+        await db.flush()
+        return partido
+
     sets_needed = (cat.sets_x_partido // 2) + 1
 
     # Validate number of sets
@@ -157,7 +209,6 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> 
             raise AppError(400, "PTS_DIFERENCIA", "Ganador debe tener al menos 2 puntos de diferencia")
 
     # Upsert sets (don't delete history)
-    from sqlalchemy import text as sa_text
     for s in sets:
         ganador = partido.equipo_local_id if s["pts_local"] > s["pts_visitante"] else partido.equipo_visit_id
         res3 = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id, SetPartido.numero_set == s["numero_set"]))

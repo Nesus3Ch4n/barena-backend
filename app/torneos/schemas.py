@@ -10,15 +10,15 @@ class CategoriaIn(BaseModel):
     sets_x_partido: int = Field(default=3)
     puntos_x_set: int = Field(default=21)
     avance_x_grupo: int = Field(default=2, ge=1, le=4)
-    criterio_clasif: str = "V>S>P>DP"
+    criterio_clasif: str = Field(default="PG>SF>PF>DP", max_length=200)
     ranking_general_enabled: bool = True
     bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro|diamante_oro)$")
 
     @field_validator("sets_x_partido")
     @classmethod
     def check_sets(cls, v):
-        if v not in (1, 3, 5):
-            raise ValueError("sets_x_partido debe ser 1, 3 o 5")
+        if v not in (1, 2, 3, 5):
+            raise ValueError("sets_x_partido debe ser 1, 2, 3 o 5")
         return v
 
     @field_validator("puntos_x_set")
@@ -26,6 +26,24 @@ class CategoriaIn(BaseModel):
     def check_puntos(cls, v):
         if v not in (15, 21, 25):
             raise ValueError("puntos_x_set debe ser 15, 21 o 25")
+        return v
+
+    @field_validator("criterio_clasif")
+    @classmethod
+    def check_criterio(cls, v):
+        # permite 1-16 criterios separados por >  (ej: PG>SF>PF>DP>PTS)
+        if v is None:
+            return v
+        parts = [p.strip() for p in v.split(">") if p.strip()]
+        if len(parts) < 1 or len(parts) > 16:
+            raise ValueError("criterio_clasif debe tener 1-16 criterios separados por >")
+        valid = {"PG","PE","PP","PJ","PTS","SF","SC","PF","PC","DP","DS","V","S","P","SG","PPG"}
+        # mapea V->PG, S->SF, P->PF para compatibilidad
+        for p in parts:
+            if p not in valid and p.upper() not in valid:
+                # permitir tambien formas antiguas V,S,P
+                if p not in {"V","S","P","DP","SG"}:
+                    raise ValueError(f"criterio desconocido: {p}")
         return v
 
     class Config:
@@ -92,8 +110,8 @@ class CategoriaUpdate(BaseModel):
     def check_sets_upd(cls, v):
         if v is None:
             return v
-        if v not in (1, 3, 5):
-            raise ValueError("sets_x_partido debe ser 1, 3 o 5")
+        if v not in (1, 2, 3, 5):
+            raise ValueError("sets_x_partido debe ser 1, 2, 3 o 5")
         return v
 
     @field_validator("puntos_x_set")
@@ -103,6 +121,16 @@ class CategoriaUpdate(BaseModel):
             return v
         if v not in (15, 21, 25):
             raise ValueError("puntos_x_set debe ser 15, 21 o 25")
+        return v
+
+    @field_validator("criterio_clasif")
+    @classmethod
+    def check_criterio_upd(cls, v):
+        if v is None:
+            return v
+        parts = [p.strip() for p in v.split(">") if p.strip()]
+        if len(parts) < 1 or len(parts) > 16:
+            raise ValueError("criterio_clasif debe tener 1-16 criterios")
         return v
 
 class TorneoOut(BaseModel):
