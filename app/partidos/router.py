@@ -50,14 +50,16 @@ async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None,
     return {"success": True, "data": data, "error": None}
 
 @router.patch("/{partido_id}/programar", response_model=dict)
-async def programar(partido_id: str, body: ProgramarIn, user=Depends(require_roles("organizador", "juez_anotador", "super_admin")), db: AsyncSession = Depends(get_db)):
-    partido = await programar_partido(db, partido_id, body.cancha, body.fecha_hora)
+async def programar(partido_id: str, body: ProgramarIn, request: Request, user=Depends(require_roles("organizador", "juez_anotador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
+    partido = await programar_partido(db, partido_id, body.cancha, body.fecha_hora, is_organizador=is_org)
     return {"success": True, "data": {"id": partido.id, "cancha": partido.cancha, "fecha_hora": partido.fecha_hora.isoformat() if partido.fecha_hora else None}, "error": None}
 
 @router.post("/{partido_id}/resultado", response_model=dict)
-async def resultado(partido_id: str, body: ResultadoIn, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+async def resultado(partido_id: str, body: ResultadoIn, request: Request, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     sets = [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "duracion_min": s.duracion_min} for s in body.sets]
-    partido = await registrar_resultado(db, partido_id, sets)
+    is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
+    partido = await registrar_resultado(db, partido_id, sets, is_organizador=is_org)
     return {"success": True, "data": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id}, "error": None}
 
 @router.get("/{partido_id}", response_model=dict)
@@ -72,7 +74,8 @@ async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession =
 @router.patch("/{partido_id}", response_model=dict)
 async def actualizar(partido_id: str, body: PartidoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, (await db.execute(select(Partido.categoria_id).where(Partido.id == partido_id))).scalar_one_or_none() or "", user.id, "super_admin" in getattr(request.state, "roles", []))
-    partido = await actualizar_partido(db, partido_id, body.model_dump(exclude_unset=True))
+    is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
+    partido = await actualizar_partido(db, partido_id, body.model_dump(exclude_unset=True), is_organizador=is_org)
     return {"success": True, "data": {"id": partido.id, "grupo_id": partido.grupo_id, "fase": partido.fase, "bracket_tipo": partido.bracket_tipo}, "error": None}
 
 @router.delete("/{partido_id}", response_model=dict)
@@ -82,7 +85,8 @@ async def eliminar(partido_id: str, request: Request, user=Depends(require_roles
     cat_id = res.scalar_one_or_none()
     if cat_id:
         await _verify_categoria_owner(db, cat_id, user.id, "super_admin" in getattr(request.state, "roles", []))
-    await eliminar_partido(db, partido_id)
+    is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
+    await eliminar_partido(db, partido_id, is_organizador=is_org)
     return {"success": True, "data": {"deleted": True}, "error": None}
 
 @categoria_fixture_router.post("/partidos", status_code=201, response_model=dict)

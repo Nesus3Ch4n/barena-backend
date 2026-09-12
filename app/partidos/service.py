@@ -100,7 +100,7 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
     await db.flush()
     return partidos_creados
 
-async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = None, fecha_hora=None) -> Partido:
+async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = None, fecha_hora=None, is_organizador: bool = False) -> Partido:
     from uuid import UUID as _UUID
     try:
         _UUID(partido_id)
@@ -110,8 +110,8 @@ async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = Non
     partido = res.scalar_one_or_none()
     if not partido:
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
-    if partido.estado == "finalizado":
-        raise AppError(400, "PARTIDO_YA_FINALIZADO", "No se puede reprogramar un partido finalizado")
+    if partido.estado == "finalizado" and not is_organizador:
+        raise AppError(400, "PARTIDO_YA_FINALIZADO", "No se puede reprogramar un partido finalizado - solo organizador")
     if cancha is not None and len(cancha) > 50:
         raise AppError(400, "CANCHA_TOO_LONG", "Cancha máx 50 caracteres")
     if cancha is not None:
@@ -121,13 +121,13 @@ async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = Non
     await db.flush()
     return partido
 
-async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list) -> Partido:
+async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_organizador: bool = False) -> Partido:
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()
     if not partido:
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
-    if partido.estado == "finalizado":
-        raise AppError(400, "PARTIDO_YA_FINALIZADO", "Partido ya finalizado")
+    if partido.estado == "finalizado" and not is_organizador:
+        raise AppError(400, "PARTIDO_YA_FINALIZADO", "Partido ya finalizado - solo organizador puede editar")
 
     res2 = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
     cat = res2.scalar_one_or_none()
@@ -293,13 +293,13 @@ async def crear_partido_manual(db: AsyncSession, data: dict) -> Partido:
     await db.flush()
     return p
 
-async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict) -> Partido:
+async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict, is_organizador: bool = False) -> Partido:
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()
     if not partido:
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
-    if partido.estado == "finalizado":
-        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede editar un partido finalizado")
+    if partido.estado == "finalizado" and not is_organizador:
+        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede editar un partido finalizado - solo organizador")
     for k in ["grupo_id", "fase", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo"]:
         if k in data and data[k] is not None:
             setattr(partido, k, data[k])
@@ -313,12 +313,12 @@ async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict) -> P
     await db.flush()
     return partido
 
-async def eliminar_partido(db: AsyncSession, partido_id: str):
+async def eliminar_partido(db: AsyncSession, partido_id: str, is_organizador: bool = False):
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()
     if not partido:
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
-    if partido.estado == "finalizado":
-        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede eliminar un partido finalizado")
+    if partido.estado == "finalizado" and not is_organizador:
+        raise AppError(400, "PARTIDO_FINALIZADO", "No se puede eliminar un partido finalizado - solo organizador")
     await db.delete(partido)
     await db.flush()
