@@ -18,6 +18,7 @@ class RankingGrupo(Base):
     sets_contra: Mapped[int] = mapped_column(Integer, default=0)
     puntos_favor: Mapped[int] = mapped_column(Integer, default=0)
     puntos_contra: Mapped[int] = mapped_column(Integer, default=0)
+    sanciones: Mapped[int] = mapped_column(Integer, default=0)
     posicion: Mapped[int] = mapped_column(Integer, default=0)
 
 class RankingGeneral(Base):
@@ -30,4 +31,5 @@ class RankingGeneral(Base):
     pe: Mapped[int] = mapped_column(Integer, default=0)
     pp: Mapped[int] = mapped_column(Integer, default=0)
     pts: Mapped[int] = mapped_column(Integer, default=0)
+    sanciones: Mapped[int] = mapped_column(Integer, default=0)
     posicion: Mapped[int] = mapped_column(Integer, default=0)

@@ -10,7 +10,7 @@ class CategoriaIn(BaseModel):
     sets_x_partido: int = Field(default=3)
     puntos_x_set: int = Field(default=21)
     avance_x_grupo: int = Field(default=2, ge=1, le=4)
-    criterio_clasif: str = Field(default="PG>SF>PF>DP", max_length=200)
+    criterio_clasif: str = Field(default="PTS>SF>CP>JL", max_length=200)
     ranking_general_enabled: bool = True
     bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro|diamante_oro)$")
     diferencia_dos_puntos: bool = True
@@ -32,13 +32,13 @@ class CategoriaIn(BaseModel):
     @field_validator("criterio_clasif")
     @classmethod
     def check_criterio(cls, v):
-        # permite 1-16 criterios separados por >  (ej: PG>SF>PF>DP>PTS)
+        # permite 1-16 criterios separados por >  (ej: PTS>SF>CP>JL)
         if v is None:
             return v
         parts = [p.strip() for p in v.split(">") if p.strip()]
         if len(parts) < 1 or len(parts) > 16:
             raise ValueError("criterio_clasif debe tener 1-16 criterios separados por >")
-        valid = {"PG","PE","PP","PJ","PTS","SF","SC","PF","PC","DP","DS","V","S","P","SG","PPG"}
+        valid = {"PG","PE","PP","PJ","PTS","SF","SC","PF","PC","DP","DS","CP","CS","JL","V","S","P","SG","PPG"}
         # mapea V->PG, S->SF, P->PF para compatibilidad
         for p in parts:
             if p not in valid and p.upper() not in valid:
@@ -133,6 +133,10 @@ class CategoriaUpdate(BaseModel):
         parts = [p.strip() for p in v.split(">") if p.strip()]
         if len(parts) < 1 or len(parts) > 16:
             raise ValueError("criterio_clasif debe tener 1-16 criterios")
+        valid = {"PG","PE","PP","PJ","PTS","SF","SC","PF","PC","DP","DS","CP","CS","JL","V","S","P","SG","PPG"}
+        for p in parts:
+            if p not in valid and p.upper() not in valid and p not in {"V","S","P","DP","SG"}:
+                raise ValueError(f"criterio desconocido: {p}")
         return v
 
 class TorneoOut(BaseModel):

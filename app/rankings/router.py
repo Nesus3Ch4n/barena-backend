@@ -11,12 +11,12 @@ torneo_router = APIRouter(prefix="/torneos/{torneo_id}/rankings", tags=["ranking
 @router.get("/grupo/{grupo_id}", response_model=dict)
 async def grupo(grupo_id: str, db: AsyncSession = Depends(get_db)):
     data = await list_rankings_grupo(db, grupo_id)
-    return {"success": True, "data": [{"equipo_id": r.equipo_id, "pj": r.pj, "pg": r.pg, "pp": r.pp, "sets_favor": r.sets_favor, "sets_contra": r.sets_contra, "puntos_favor": r.puntos_favor, "puntos_contra": r.puntos_contra, "posicion": r.posicion} for r in data], "error": None}
+    return {"success": True, "data": [{"equipo_id": r.equipo_id, "pj": r.pj, "pg": r.pg, "pp": r.pp, "pe": r.pe, "pts": r.pts, "sets_favor": r.sets_favor, "sets_contra": r.sets_contra, "puntos_favor": r.puntos_favor, "puntos_contra": r.puntos_contra, "sanciones": r.sanciones, "posicion": r.posicion} for r in data], "error": None}
 
 @categoria_router.get("/grupo", response_model=dict)
 async def categoria_grupo(categoria_id: str, db: AsyncSession = Depends(get_db)):
     data = await list_rankings_categoria_grupo(db, categoria_id)
-    return {"success": True, "data": [{"grupo_id": r.grupo_id, "equipo_id": r.equipo_id, "posicion": r.posicion, "pg": r.pg} for r in data], "error": None}
+    return {"success": True, "data": [{"grupo_id": r.grupo_id, "equipo_id": r.equipo_id, "posicion": r.posicion, "pg": r.pg, "sanciones": r.sanciones} for r in data], "error": None}
 
 @categoria_router.get("/general", response_model=dict)
 async def general(categoria_id: str, db: AsyncSession = Depends(get_db)):

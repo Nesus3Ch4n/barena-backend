@@ -185,13 +185,18 @@ async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = Non
     await db.flush()
     return partido
 
-async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_organizador: bool = False) -> Partido:
+async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_organizador: bool = False, tarjetas: dict = None) -> Partido:
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()
     if not partido:
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
     if partido.estado == "finalizado" and not is_organizador:
         raise AppError(400, "PARTIDO_YA_FINALIZADO", "Partido ya finalizado - solo organizador puede editar")
+
+    tarjetas = tarjetas or {}
+    if tarjetas:
+        for k in ["tarjetas_amarillas_local", "tarjetas_rojas_local", "tarjetas_amarillas_visit", "tarjetas_rojas_visit"]:
+            setattr(partido, k, max(0, int(tarjetas.get(k, 0))))
 
     res2 = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
     cat = res2.scalar_one_or_none()

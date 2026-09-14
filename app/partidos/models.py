@@ -20,6 +20,10 @@ class Partido(Base):
     es_cuadro_perdedores: Mapped[bool] = mapped_column(Boolean, default=False)
     bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
     arbitro_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    tarjetas_amarillas_local: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tarjetas_rojas_local: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tarjetas_amarillas_visit: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tarjetas_rojas_visit: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 class SetPartido(Base):
     __tablename__ = "sets_partido"

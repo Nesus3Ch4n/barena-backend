@@ -65,13 +65,19 @@ async def programar(partido_id: str, body: ProgramarIn, request: Request, user=D
 async def resultado(partido_id: str, body: ResultadoIn, request: Request, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     sets = [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "duracion_min": s.duracion_min} for s in body.sets]
     is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
-    partido = await registrar_resultado(db, partido_id, sets, is_organizador=is_org)
+    tarjetas = {
+        "tarjetas_amarillas_local": body.tarjetas_amarillas_local,
+        "tarjetas_rojas_local": body.tarjetas_rojas_local,
+        "tarjetas_amarillas_visit": body.tarjetas_amarillas_visit,
+        "tarjetas_rojas_visit": body.tarjetas_rojas_visit,
+    }
+    partido = await registrar_resultado(db, partido_id, sets, is_organizador=is_org, tarjetas=tarjetas)
     return {"success": True, "data": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id}, "error": None}
 
 @router.get("/{partido_id}", response_model=dict)
 async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     partido, sets = await get_partido(db, partido_id)
-    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha}, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
+    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha, "tarjetas_amarillas_local": partido.tarjetas_amarillas_local, "tarjetas_rojas_local": partido.tarjetas_rojas_local, "tarjetas_amarillas_visit": partido.tarjetas_amarillas_visit, "tarjetas_rojas_visit": partido.tarjetas_rojas_visit}, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
 
 @router.get("/{partido_id}/qr", response_model=dict)
 async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):

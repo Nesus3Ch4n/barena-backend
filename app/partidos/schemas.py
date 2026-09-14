@@ -23,6 +23,10 @@ class SetIn(BaseModel):
 
 class ResultadoIn(BaseModel):
     sets: List[SetIn] = Field(min_length=1, max_length=5)
+    tarjetas_amarillas_local: int = Field(default=0, ge=0, le=99)
+    tarjetas_rojas_local: int = Field(default=0, ge=0, le=99)
+    tarjetas_amarillas_visit: int = Field(default=0, ge=0, le=99)
+    tarjetas_rojas_visit: int = Field(default=0, ge=0, le=99)
 
 class PartidoOut(BaseModel):
     id: str
