@@ -6,7 +6,7 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
 from app.partidos.schemas import GenerarFixtureIn, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn
-from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, programar_partido, registrar_resultado, list_partidos, get_partido
+from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, programar_partido, registrar_resultado, list_partidos, get_partido, generar_bracket_desde_ranking
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
