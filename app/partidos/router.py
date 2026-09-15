@@ -52,7 +52,7 @@ async def avanzar_bracket(categoria_id: str, request: Request, user=Depends(requ
 @torneo_partidos_router.get("", response_model=dict)
 async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     partidos = await list_partidos(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
-    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo} for p in partidos]
+    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id} for p in partidos]
     return {"success": True, "data": data, "error": None}
 
 @router.patch("/{partido_id}/programar", response_model=dict)

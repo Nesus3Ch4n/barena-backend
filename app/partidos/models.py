@@ -19,6 +19,8 @@ class Partido(Base):
     ganador_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=True)
     es_cuadro_perdedores: Mapped[bool] = mapped_column(Boolean, default=False)
     bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
+    orden_en_round: Mapped[int] = mapped_column(Integer, nullable=True)
+    partido_siguiente_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("partidos.id", ondelete="SET NULL"), nullable=True)
     arbitro_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     tarjetas_amarillas_local: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tarjetas_rojas_local: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

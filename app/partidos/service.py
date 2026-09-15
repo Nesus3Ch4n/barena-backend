@@ -33,7 +33,7 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
         for i in range(n // 2):
             a = eqs_sorted[i]
             b = eqs_sorted[n - 1 - i]
-            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype)
+            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype, orden_en_round=i)
             db.add(p)
             partidos_creados.append(p)
 
@@ -146,7 +146,7 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
         for i in range(m // 2):
             a = eqs[i]
             b = eqs[m - 1 - i]
-            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype)
+            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype, orden_en_round=i)
             db.add(p)
             partidos_creados.append(p)
     if efectivo_bracket == "diamante_oro":
@@ -162,7 +162,39 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
     else:
         _crear_bracket(clasificados, "general")
     await db.flush()
+    await _link_ronda_anterior(db, categoria_id, partidos_creados)
+    await db.flush()
     return partidos_creados
+
+FASE_ORDER = ["grupos", "octavos", "cuartos", "semi", "final", "tercer_puesto"]
+
+async def _link_ronda_anterior(db: AsyncSession, categoria_id: str, nuevos: list[Partido]) -> None:
+    """Enlaza los partidos de la ronda anterior (pendientes/finalizados) hacia la ronda recién generada."""
+    from collections import defaultdict
+    por_fase_btype = defaultdict(list)
+    for p in nuevos:
+        por_fase_btype[(p.fase, p.bracket_tipo)].append(p)
+    for (fase, btype), matches in por_fase_btype.items():
+        idx = FASE_ORDER.index(fase) if fase in FASE_ORDER else -1
+        if idx <= 0:
+            continue
+        prev_fase = FASE_ORDER[idx - 1]
+        if prev_fase == "grupos":
+            continue  # los grupos alimentan el bracket vía rankings, no vía enlace partido->partido
+        res = await db.execute(
+            select(Partido).where(
+                Partido.categoria_id == categoria_id,
+                Partido.fase == prev_fase,
+                Partido.bracket_tipo == btype,
+                Partido.estado != "eliminado",
+            ).order_by(Partido.orden_en_round.asc(), Partido.id.asc())
+        )
+        prevs = res.scalars().all()
+        for i, nuevo in enumerate(matches):
+            if i * 2 < len(prevs):
+                prevs[i * 2].partido_siguiente_id = nuevo.id
+            if i * 2 + 1 < len(prevs):
+                prevs[i * 2 + 1].partido_siguiente_id = nuevo.id
 
 async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = None, fecha_hora=None, is_organizador: bool = False) -> Partido:
     from uuid import UUID as _UUID
