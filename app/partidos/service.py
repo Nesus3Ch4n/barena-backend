@@ -138,6 +138,19 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
     partidos_creados = []
     # borrar pendientes de fases eliminatorias previas
     await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(["cuartos", "semi", "final", "tercer_puesto"]), Partido.estado == "pendiente"))
+    # slots ya finalizados: no recrear duplicados (evita doble partido en el mismo orden de ronda)
+    res = await db.execute(
+        select(Partido).where(
+            Partido.categoria_id == categoria_id,
+            Partido.fase.in_(["cuartos", "semi", "final", "tercer_puesto"]),
+            Partido.estado == "finalizado",
+            Partido.orden_en_round.is_not(None),
+        )
+    )
+    slots_finalizados = {
+        (p.fase, p.bracket_tipo, p.orden_en_round, p.equipo_local_id, p.equipo_visit_id)
+        for p in res.scalars().all()
+    }
     def _crear_bracket(eqs, btype):
         # ordenar por seed o ranking (ya vienen por ranking, pero para diamante/oro usamos ranking general)
         # 1 vs ultimo
@@ -146,6 +159,8 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
         for i in range(m // 2):
             a = eqs[i]
             b = eqs[m - 1 - i]
+            if (fase, btype, i, a.id, b.id) in slots_finalizados:
+                continue
             p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype, orden_en_round=i)
             db.add(p)
             partidos_creados.append(p)
