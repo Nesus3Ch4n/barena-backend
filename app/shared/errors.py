@@ -92,7 +92,7 @@ async def unhandled_error_handler(request: Request, exc: Exception):
         content={
             "success": False,
             "data": None,
-            "error": {"code": "INTERNAL_ERROR", "message": "Error interno del servidor", "details": {}, "request_id": rid},
+            "error": {"code": "INTERNAL_ERROR", "message": str(exc) or exc.__class__.__name__, "details": {"exc": f"{exc.__class__.__module__}.{exc.__class__.__name__}: {exc}"}, "request_id": rid},
         },
         headers={"X-Request-ID": rid},
     )
