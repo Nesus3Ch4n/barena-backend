@@ -18,6 +18,15 @@ class EquipoAprobarIn(BaseModel):
     grupo_id: Optional[str] = None
     seed: Optional[int] = Field(default=None, ge=1)
 
+class EquipoUpdate(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=2, max_length=80)
+    ciudad: Optional[str] = None
+    categoria_id: Optional[str] = None
+    atletas: Optional[List[AtletaIn]] = None
+    foto_url: Optional[str] = None
+    grupo_id: Optional[str] = None
+    seed: Optional[int] = Field(None, ge=1)
+
 class EquipoOut(BaseModel):
     id: str
     nombre: str
