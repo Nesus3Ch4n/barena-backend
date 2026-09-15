@@ -1,6 +1,6 @@
 import uuid, random, string
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update
+from sqlalchemy import select, insert, update, delete
 from app.equipos.models import Equipo
 from app.torneos.models import Categoria, Torneo, Rama
 from app.atletas.models import Atleta
@@ -10,12 +10,12 @@ from app.equipos.schemas import EquipoCreate
 def gen_codigo():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-async def verify_torneo_owner(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool):
+async def verify_torneo_owner(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool = False):
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()
     if not torneo:
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
-    if torneo.organizador_id != user_id and not is_super:
+    if torneo.organizador_id != user_id and not is_super and not is_org:
         raise AppError(403, "FORBIDDEN", "No eres organizador de este torneo")
     return torneo
 
@@ -31,8 +31,8 @@ async def verify_categoria_in_torneo(db: AsyncSession, categoria_id: str, torneo
         raise AppError(400, "CATEGORIA_NO_PERTENECE", "Categoria no pertenece a este torneo")
     return cat
 
-async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, user_id: str, is_super: bool) -> Equipo:
-    torneo = await verify_torneo_owner(db, torneo_id, user_id, is_super)
+async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, user_id: str, is_super: bool, is_org: bool = False) -> Equipo:
+    torneo = await verify_torneo_owner(db, torneo_id, user_id, is_super, is_org)
     cat = await verify_categoria_in_torneo(db, data.categoria_id, torneo_id)
     # validar atletas: debe haber 2 titulares
     titulares = [a for a in data.atletas if a.posicion == "titular"]
@@ -72,14 +72,14 @@ async def list_equipos(db: AsyncSession, torneo_id: str, categoria_id: str = Non
     res = await db.execute(query)
     return res.scalars().all()
 
-async def aprobar_equipo(db: AsyncSession, equipo_id: str, grupo_id: str = None, seed: int = None, torneo_id: str = None, user_id: str = None, is_super: bool = False):
+async def aprobar_equipo(db: AsyncSession, equipo_id: str, grupo_id: str = None, seed: int = None, torneo_id: str = None, user_id: str = None, is_super: bool = False, is_org: bool = False):
     res = await db.execute(select(Equipo).where(Equipo.id == equipo_id))
     equipo = res.scalar_one_or_none()
     if not equipo:
         raise NotFound("EQUIPO_NOT_FOUND", "Equipo no existe", {"id": equipo_id})
     # verify owner via torneo
     if torneo_id:
-        await verify_torneo_owner(db, torneo_id, user_id, is_super)
+        await verify_torneo_owner(db, torneo_id, user_id, is_super, is_org)
     # verify grupo pertenece a misma categoria
     if grupo_id:
         from app.torneos.models import Grupo
@@ -99,6 +99,74 @@ async def rechazar_equipo(db: AsyncSession, equipo_id: str):
     if not equipo:
         raise NotFound("EQUIPO_NOT_FOUND", "Equipo no existe", {"id": equipo_id})
     equipo.estado = "eliminado"
+    await db.flush()
+    return equipo
+
+async def update_equipo(db: AsyncSession, equipo_id: str, data, user_id: str, is_super: bool, is_org: bool = False):
+    from app.equipos.schemas import EquipoUpdate
+    assert isinstance(data, EquipoUpdate)
+    res = await db.execute(select(Equipo).where(Equipo.id == equipo_id))
+    equipo = res.scalar_one_or_none()
+    if not equipo:
+        raise NotFound("EQUIPO_NOT_FOUND", "Equipo no existe", {"id": equipo_id})
+    # verify owner via categoria -> rama -> torneo
+    from app.torneos.models import Categoria, Rama, Torneo
+    res2 = await db.execute(select(Rama.torneo_id).join(Categoria, Categoria.id == equipo.categoria_id).where(Categoria.id == equipo.categoria_id))
+    # actually need to get torneo_id via join
+    res3 = await db.execute(select(Categoria).where(Categoria.id == equipo.categoria_id))
+    cat = res3.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no existe")
+    res4 = await db.execute(select(Rama).where(Rama.id == cat.rama_id))
+    rama = res4.scalar_one_or_none()
+    if not rama:
+        raise NotFound("RAMA_NOT_FOUND", "Rama no existe")
+    await verify_torneo_owner(db, rama.torneo_id, user_id, is_super, is_org)
+    upd = data.model_dump(exclude_unset=True)
+    if "nombre" in upd and upd["nombre"] is not None:
+        # check duplicate in same categoria if nombre changes
+        if upd["nombre"] != equipo.nombre:
+            res_dup = await db.execute(select(Equipo).where(Equipo.categoria_id == (upd.get("categoria_id") or equipo.categoria_id), Equipo.nombre == upd["nombre"], Equipo.id != equipo_id))
+            if res_dup.scalar_one_or_none():
+                raise AppError(409, "EQUIPO_DUPLICADO", "Ya existe equipo con ese nombre en la categoria")
+        equipo.nombre = upd["nombre"].strip()
+    if "ciudad" in upd:
+        equipo.ciudad = upd["ciudad"].strip() if upd["ciudad"] else None
+    if "categoria_id" in upd and upd["categoria_id"]:
+        await verify_categoria_in_torneo(db, upd["categoria_id"], rama.torneo_id)
+        equipo.categoria_id = upd["categoria_id"]
+        # si cambia categoria, reset grupo
+        equipo.grupo_id = None
+    if "grupo_id" in upd:
+        if upd["grupo_id"]:
+            from app.torneos.models import Grupo
+            resg = await db.execute(select(Grupo).where(Grupo.id == upd["grupo_id"], Grupo.categoria_id == equipo.categoria_id))
+            if not resg.scalar_one_or_none():
+                raise AppError(400, "GRUPO_INVALIDO", "Grupo no pertenece a la categoria")
+        equipo.grupo_id = upd["grupo_id"]
+    if "seed" in upd:
+        equipo.seed = upd["seed"]
+    if "foto_url" in upd:
+        equipo.foto_url = upd["foto_url"]
+    if "atletas" in upd and upd["atletas"] is not None:
+        # validar 2-3 atletas, 2 titulares
+        titulares = [a for a in upd["atletas"] if getattr(a, "posicion", "titular") == "titular"]
+        if len(titulares) != 2:
+            raise AppError(400, "ATLETAS_TITULARES_INVALIDO", "Equipo debe tener exactamente 2 titulares")
+        if len(upd["atletas"]) < 2 or len(upd["atletas"]) > 3:
+            raise AppError(400, "ATLETAS_INVALIDO", "Equipo debe tener 2 o 3 atletas")
+        # borrar atletas existentes y recrear
+        await db.execute(delete(Atleta).where(Atleta.equipo_id == equipo_id))
+        await db.flush()
+        for atleta_in in upd["atletas"]:
+            codigo = gen_codigo()
+            for _ in range(3):
+                res = await db.execute(select(Atleta).where(Atleta.codigo_reclamo == codigo))
+                if not res.scalar_one_or_none():
+                    break
+                codigo = gen_codigo()
+            atleta = Atleta(equipo_id=equipo.id, nombre_completo=atleta_in.nombre_completo, posicion=atleta_in.posicion, doc_identidad=atleta_in.doc_identidad, codigo_reclamo=codigo)
+            db.add(atleta)
     await db.flush()
     return equipo
 

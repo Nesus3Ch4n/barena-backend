@@ -1,0 +1,91 @@
+"""ranking 3/2/1 y cocientes
+
+Revision ID: 007_ranking_321
+Revises: 006_categoria_diferencia
+Create Date: 2026-09-12
+"""
+from alembic import op
+import sqlalchemy as sa
+
+revision = "007_ranking_321"
+down_revision = "006_categoria_diferencia"
+branch_labels = None
+depends_on = None
+
+def upgrade() -> None:
+    op.execute("""
+        -- actualizar rankings_grupo para 3/2/1
+        CREATE OR REPLACE FUNCTION fn_recalc_rankings_grupo(p_grupo_id UUID) RETURNS VOID AS $$
+        DECLARE
+            v_categoria_id UUID;
+        BEGIN
+            SELECT categoria_id INTO v_categoria_id FROM grupos WHERE id = p_grupo_id;
+            IF v_categoria_id IS NULL THEN RETURN; END IF;
+            DELETE FROM rankings_grupo WHERE grupo_id = p_grupo_id;
+            INSERT INTO rankings_grupo (grupo_id, equipo_id, pj, pg, pe, pp, pts, sets_favor, sets_contra, puntos_favor, puntos_contra, posicion)
+            WITH equipos_grupo AS (
+                SELECT id FROM equipos WHERE grupo_id = p_grupo_id AND estado != 'eliminado'
+            ),
+            partidos_grupo AS (
+                SELECT * FROM partidos WHERE grupo_id = p_grupo_id AND estado = 'finalizado'
+            ),
+            stats_por_equipo AS (
+                SELECT
+                    e.id as equipo_id,
+                    COUNT(p.id) as pj,
+                    COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END) as pg,
+                    COUNT(CASE WHEN p.ganador_id IS NULL AND p.estado='finalizado' AND (p.equipo_local_id=e.id OR p.equipo_visit_id=e.id) THEN 1 END) as pe,
+                    (SELECT COUNT(*) FROM sets_partido s JOIN partidos pp ON s.partido_id=pp.id WHERE pp.id IN (SELECT id FROM partidos_grupo) AND s.ganador_id = e.id) as sets_favor,
+                    (SELECT COUNT(*) FROM sets_partido s JOIN partidos pp ON s.partido_id=pp.id WHERE pp.id IN (SELECT id FROM partidos_grupo WHERE equipo_local_id=e.id OR equipo_visit_id=e.id) AND s.ganador_id IS NOT NULL) as total_sets_equipo,
+                    COALESCE((SELECT SUM(CASE WHEN pp.equipo_local_id=e.id THEN s.pts_local ELSE s.pts_visitante END) FROM sets_partido s JOIN partidos pp ON s.partido_id=pp.id WHERE pp.id IN (SELECT id FROM partidos_grupo WHERE equipo_local_id=e.id OR equipo_visit_id=e.id)),0) as puntos_favor,
+                    COALESCE((SELECT SUM(CASE WHEN pp.equipo_local_id=e.id THEN s.pts_visitante ELSE s.pts_local END) FROM sets_partido s JOIN partidos pp ON s.partido_id=pp.id WHERE pp.id IN (SELECT id FROM partidos_grupo WHERE equipo_local_id=e.id OR equipo_visit_id=e.id)),0) as puntos_contra
+                FROM equipos_grupo e
+                LEFT JOIN partidos_grupo p ON p.equipo_local_id=e.id OR p.equipo_visit_id=e.id
+                GROUP BY e.id
+            ),
+            con_pp AS (
+                SELECT equipo_id, pj, pg, pe, (pj - pg - pe) as pp, (pg*3 + pe*2 + (pj-pg-pe)*1) as pts, sets_favor, (total_sets_equipo - sets_favor) as sets_contra, puntos_favor, puntos_contra,
+                       CASE WHEN puntos_contra=0 THEN puntos_favor::float ELSE puntos_favor::float / NULLIF(puntos_contra,0) END as cociente_puntos,
+                       CASE WHEN sets_contra=0 THEN sets_favor::float ELSE sets_favor::float / NULLIF(sets_contra,0) END as cociente_sets
+                FROM stats_por_equipo
+            )
+            SELECT p_grupo_id, equipo_id, pj, pg, pe, pp, pts, sets_favor, sets_contra, puntos_favor, puntos_contra,
+                   ROW_NUMBER() OVER (ORDER BY pts DESC, pg DESC, sets_favor DESC, cociente_sets DESC, puntos_favor DESC, cociente_puntos DESC, (puntos_favor - puntos_contra) DESC, equipo_id)
+            FROM con_pp;
+        END;
+        $$ LANGUAGE plpgsql;
+
+        CREATE OR REPLACE FUNCTION fn_recalc_rankings_general(p_categoria_id UUID) RETURNS VOID AS $$
+        BEGIN
+            DELETE FROM rankings_general WHERE categoria_id = p_categoria_id;
+            INSERT INTO rankings_general (categoria_id, equipo_id, pj, pg, pe, pp, pts, posicion)
+            WITH equipos_cat AS (
+                SELECT id FROM equipos WHERE categoria_id = p_categoria_id AND estado != 'eliminado'
+            ),
+            partidos_cat AS (
+                SELECT * FROM partidos WHERE categoria_id = p_categoria_id AND estado = 'finalizado'
+            )
+            SELECT p_categoria_id, e.id,
+                   COUNT(p.id) as pj,
+                   COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END) as pg,
+                   COUNT(CASE WHEN p.ganador_id IS NULL AND p.estado='finalizado' AND (p.equipo_local_id=e.id OR p.equipo_visit_id=e.id) THEN 1 END) as pe,
+                   COUNT(p.id) - COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END) - COUNT(CASE WHEN p.ganador_id IS NULL AND p.estado='finalizado' AND (p.equipo_local_id=e.id OR p.equipo_visit_id=e.id) THEN 1 END) as pp,
+                   COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END)*3 + COUNT(CASE WHEN p.ganador_id IS NULL AND p.estado='finalizado' AND (p.equipo_local_id=e.id OR p.equipo_visit_id=e.id) THEN 1 END)*2 + (COUNT(p.id) - COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END) - COUNT(CASE WHEN p.ganador_id IS NULL AND p.estado='finalizado' AND (p.equipo_local_id=e.id OR p.equipo_visit_id=e.id) THEN 1 END))*1 as pts,
+                   ROW_NUMBER() OVER (ORDER BY (COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END)*3 + COUNT(CASE WHEN p.ganador_id IS NULL THEN 1 END)*2) DESC, COUNT(CASE WHEN p.ganador_id = e.id THEN 1 END) DESC, COUNT(p.id) DESC, e.id)
+            FROM equipos_cat e
+            LEFT JOIN partidos_cat p ON p.equipo_local_id=e.id OR p.equipo_visit_id=e.id
+            GROUP BY e.id;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+
+def downgrade() -> None:
+    op.execute("""
+        -- revert to previous (simplified)
+        CREATE OR REPLACE FUNCTION fn_recalc_rankings_grupo(p_grupo_id UUID) RETURNS VOID AS $$
+        BEGIN
+            DELETE FROM rankings_grupo WHERE grupo_id = p_grupo_id;
+            INSERT INTO rankings_grupo (grupo_id, equipo_id, pj, pg, pp, sets_favor, sets_contra, puntos_favor, puntos_contra, posicion)
+            SELECT p_grupo_id, equipo_id, pj, pg, (pj-pg) as pp, sets_favor, sets_contra, puntos_favor, puntos_contra, ROW_NUMBER() OVER (ORDER BY pg DESC, sets_favor DESC, puntos_favor DESC) FROM (SELECT 1) as t;
+        END; $$ LANGUAGE plpgsql;
+    """)
