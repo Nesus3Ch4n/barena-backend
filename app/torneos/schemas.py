@@ -10,6 +10,7 @@ class CategoriaIn(BaseModel):
     sets_x_partido: int = Field(default=3)
     puntos_x_set: int = Field(default=21)
     avance_x_grupo: int = Field(default=2, ge=1, le=4)
+    clasificacion: str = Field(default="grupos", pattern="^(grupos|ranking_general)$")
     criterio_clasif: str = Field(default="PTS>SF>CP>JL", max_length=200)
     ranking_general_enabled: bool = True
     bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro|diamante_oro)$")
@@ -102,6 +103,7 @@ class CategoriaUpdate(BaseModel):
     sets_x_partido: Optional[int] = None
     puntos_x_set: Optional[int] = None
     avance_x_grupo: Optional[int] = Field(default=None, ge=1, le=4)
+    clasificacion: Optional[str] = Field(default=None, pattern="^(grupos|ranking_general)$")
     criterio_clasif: Optional[str] = None
     ranking_general_enabled: Optional[bool] = None
     bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro|diamante_oro)$")
@@ -170,6 +172,7 @@ class CategoriaOut(BaseModel):
     sets_x_partido: int
     puntos_x_set: int
     avance_x_grupo: int
+    clasificacion: str
     ranking_general_enabled: bool
     bracket_tipo: str
     diferencia_dos_puntos: bool

@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
-from app.partidos.schemas import GenerarFixtureIn, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn
-from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, programar_partido, registrar_resultado, list_partidos, get_partido, generar_bracket_desde_ranking
+from app.partidos.schemas import GenerarFixtureIn, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
+from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -47,12 +47,21 @@ async def generar(categoria_id: str, body: GenerarFixtureIn = None, request: Req
 async def avanzar_bracket(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
     partidos = await generar_bracket_desde_ranking(db, categoria_id)
-    return {"success": True, "data": {"generados": len(partidos), "partidos": [{"id": p.id, "fase": p.fase, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
+    return {"success": True, "data": {"generados": len(partidos), "partidos": [{"id": p.id, "fase": p.fase, "llave": p.llave, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
 
 @torneo_partidos_router.get("", response_model=dict)
 async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     partidos = await list_partidos(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
-    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id} for p in partidos]
+    if not partidos:
+        return {"success": True, "data": [], "error": None}
+    from collections import defaultdict
+    from app.partidos.models import SetPartido
+    ids = [p.id for p in partidos]
+    res = await db.execute(select(SetPartido).where(SetPartido.partido_id.in_(ids)).order_by(SetPartido.partido_id, SetPartido.numero_set))
+    sets_por_partido = defaultdict(list)
+    for s in res.scalars().all():
+        sets_por_partido[s.partido_id].append({"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id})
+    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id, "sets": sets_por_partido.get(p.id, [])} for p in partidos]
     return {"success": True, "data": data, "error": None}
 
 @router.patch("/{partido_id}/programar", response_model=dict)
@@ -82,6 +91,24 @@ async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSess
 @router.get("/{partido_id}/qr", response_model=dict)
 async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     return {"success": True, "data": {"qr_url": f"/juez/partido/{partido_id}", "partido_id": partido_id}, "error": None}
+
+LIVE_ROLES = ["juez_anotador", "organizador", "super_admin"]
+
+@router.get("/{partido_id}/live", response_model=dict)
+async def live_get(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await live_snapshot(db, partido_id), "error": None}
+
+@router.get("/{partido_id}/live/public", response_model=dict)
+async def live_public(partido_id: str, db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await live_snapshot(db, partido_id), "error": None}
+
+@router.post("/{partido_id}/live", response_model=dict)
+async def live_post(partido_id: str, body: LiveEventoIn, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await live_evento(db, partido_id, body), "error": None}
+
+@router.post("/{partido_id}/live/undo", response_model=dict)
+async def live_undo_endpoint(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await live_undo(db, partido_id), "error": None}
 
 @router.patch("/{partido_id}", response_model=dict)
 async def actualizar(partido_id: str, body: PartidoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

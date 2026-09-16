@@ -47,6 +47,7 @@ class Categoria(Base):
     sets_x_partido: Mapped[int] = mapped_column(Integer, default=3)
     puntos_x_set: Mapped[int] = mapped_column(Integer, default=21)
     avance_x_grupo: Mapped[int] = mapped_column(Integer, default=2)
+    clasificacion: Mapped[str] = mapped_column(String(20), default="grupos")
     criterio_clasif: Mapped[str] = mapped_column(String(200), default="PG>SF>PF>DP")
     ranking_general_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")

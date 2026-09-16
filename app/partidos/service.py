@@ -1,10 +1,47 @@
 import itertools, math, random
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from app.partidos.models import Partido, SetPartido
-from app.torneos.models import Categoria, Grupo
+from sqlalchemy import select, delete, desc
+from app.partidos.models import Partido, SetPartido, PartidoEvento
+from app.torneos.models import Categoria, Grupo, Rama
 from app.equipos.models import Equipo
+from app.atletas.models import Atleta
 from app.shared.errors import AppError, NotFound, BadRequest
+
+# Fase que le sigue a cada fase de eliminación directa (auto-avance del ganador).
+NEXT_FASE = {
+    "treintaidosavos": "dieciseisavos",
+    "dieciseisavos": "octavos",
+    "octavos": "cuartos",
+    "cuartos": "semi",
+    "semi": "final",
+    "final": None,
+    "tercer_puesto": None,
+}
+# Fases de eliminación directa (perdedores de semi pasan a 3er puesto).
+FASES_ELIMINATORIA = ["treintaidosavos", "dieciseisavos", "octavos", "cuartos", "semi", "final", "tercer_puesto"]
+# Nombre de fase según cantidad de llaves de ese nivel (m = llaves).
+FASE_POR_LLAVES = {1: "final", 2: "semi", 4: "cuartos", 8: "octavos", 16: "dieciseisavos", 32: "treintaidosavos"}
+
+def _es_potencia_de_2(n):
+    return n != 0 and (n & (n - 1)) == 0
+
+def _siguiente_pot2(n):
+    p = 1
+    while p < max(n, 2):
+        p <<= 1
+    return p
+
+def _seats_por_seed(n):
+    """Devuelve la lista de asientos (1-based) por seed para armar una llave
+    balanceada: seed 1 y 2 nunca chocan antes de la final."""
+    seats = [1]
+    while len(seats) < n:
+        prev = list(seats)
+        seats = [2 * x for x in prev] + [2 * x - 1 for x in reversed(prev)]
+    return seats
+
+def _fase_de_llaves(m):
+    return FASE_POR_LLAVES.get(m, "ronda")
 
 async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str = None) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
@@ -105,111 +142,184 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
     cat = res.scalar_one_or_none()
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no existe", {"id": categoria_id})
-    # obtener grupos
-    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
-    grupos = res.scalars().all()
-    if not grupos:
-        raise AppError(400, "SIN_GRUPOS", "No hay grupos en la categoria")
-    # obtener ranking por grupo
-    from app.rankings.models import RankingGrupo
+
+    clasificacion = getattr(cat, "clasificacion", "grupos") or "grupos"
     clasificados = []
-    for grupo in grupos:
-        res = await db.execute(select(RankingGrupo).where(RankingGrupo.grupo_id == grupo.id).order_by(RankingGrupo.posicion))
-        ranks = res.scalars().all()
-        # tomar avance_x_grupo primeros
-        top = ranks[: cat.avance_x_grupo]
-        for r in top:
-            # buscar equipo
-            eq_res = await db.execute(select(Equipo).where(Equipo.id == r.equipo_id))
-            eq = eq_res.scalar_one_or_none()
-            if eq:
-                clasificados.append(eq)
+
+    if clasificacion == "ranking_general":
+        # Todas las duplas aprobadas, ordenadas por ranking general (primero
+        # las posicionadas, después el resto por nombre).
+        from app.rankings.models import RankingGeneral
+        ranked_pos = {}
+        res = await db.execute(
+            select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id).order_by(RankingGeneral.posicion)
+        )
+        for r in res.scalars().all():
+            ranked_pos[r.equipo_id] = r.posicion
+        res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id, Equipo.estado == "aprobado"))
+        equipos = res.scalars().all()
+        clasificados = sorted(equipos, key=lambda e: (ranked_pos.get(e.id, 10 ** 9), e.nombre))
+    else:
+        # Clasificación por grupos: los avance_x_grupo primeros de cada grupo.
+        res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
+        grupos = res.scalars().all()
+        if not grupos:
+            raise AppError(400, "SIN_GRUPOS", "No hay grupos en la categoria")
+        from app.rankings.models import RankingGrupo
+        for grupo in grupos:
+            res = await db.execute(
+                select(RankingGrupo).where(RankingGrupo.grupo_id == grupo.id).order_by(RankingGrupo.posicion)
+            )
+            ranks = res.scalars().all()
+            for r in ranks[: cat.avance_x_grupo]:
+                eq_res = await db.execute(select(Equipo).where(Equipo.id == r.equipo_id))
+                eq = eq_res.scalar_one_or_none()
+                if eq:
+                    clasificados.append(eq)
+
     if len(clasificados) < 2:
         raise AppError(400, "CLASIFICADOS_INSUFICIENTES", "Se necesitan al menos 2 clasificados", {"count": len(clasificados)})
-    # potencia de 2
-    n = len(clasificados)
-    if n & (n - 1) != 0:
-        # no es potencia de 2, ajustar al siguiente potencia de 2 con byes o error
-        # para simplificar, si no es potencia de 2, crear bracket con los que hay, el siguiente número de potencia de 2 determinará fase
-        pass
-    # ordenar por posicion y criterios (ya viene ordenado por ranking, pero mezclamos grupos)
-    # Para diamante/oro, dividir
+
     efectivo_bracket = getattr(cat, "bracket_tipo", "general") or "general"
-    partidos_creados = []
-    # borrar pendientes de fases eliminatorias previas
-    await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(["cuartos", "semi", "final", "tercer_puesto"]), Partido.estado == "pendiente"))
-    # slots ya finalizados: no recrear duplicados (evita doble partido en el mismo orden de ronda)
-    res = await db.execute(
-        select(Partido).where(
-            Partido.categoria_id == categoria_id,
-            Partido.fase.in_(["cuartos", "semi", "final", "tercer_puesto"]),
-            Partido.estado == "finalizado",
-            Partido.orden_en_round.is_not(None),
-        )
-    )
-    slots_finalizados = {
-        (p.fase, p.bracket_tipo, p.orden_en_round, p.equipo_local_id, p.equipo_visit_id)
-        for p in res.scalars().all()
-    }
-    def _crear_bracket(eqs, btype):
-        # ordenar por seed o ranking (ya vienen por ranking, pero para diamante/oro usamos ranking general)
-        # 1 vs ultimo
-        m = len(eqs)
-        fase = "cuartos" if m > 4 else "semi" if m > 2 else "final"
-        for i in range(m // 2):
-            a = eqs[i]
-            b = eqs[m - 1 - i]
-            if (fase, btype, i, a.id, b.id) in slots_finalizados:
-                continue
-            p = Partido(categoria_id=categoria_id, fase=fase, equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo=btype, orden_en_round=i)
-            db.add(p)
-            partidos_creados.append(p)
+# Borrar llaves pendientes previas para regenerar desde cero.
+    await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(FASES_ELIMINATORIA), Partido.estado == "pendiente"))
+    await db.flush()
+
+    partidos_creados: list[Partido] = []
+
+    async def _crear_ladder_para(eqs, btype):
+        B = _siguiente_pot2(len(eqs))
+        seats = _seats_por_seed(B)
+        slots = [None] * B
+        for idx, team in enumerate(eqs):
+            pos = seats[idx] - 1
+            if 0 <= pos < B:
+                slots[pos] = team.id
+        await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
+
     if efectivo_bracket == "diamante_oro":
         mid = (len(clasificados) + 1) // 2
-        _crear_bracket(clasificados[:mid], "diamante")
-        _crear_bracket(clasificados[mid:], "oro")
+        await _crear_ladder_para(clasificados[:mid], "diamante")
+        await _crear_ladder_para(clasificados[mid:], "oro")
     elif efectivo_bracket == "diamante":
-        mid = (len(clasificados) + 1) // 2
-        _crear_bracket(clasificados[:mid], "diamante")
+        await _crear_ladder_para(clasificados[: (len(clasificados) + 1) // 2], "diamante")
     elif efectivo_bracket == "oro":
-        mid = (len(clasificados) + 1) // 2
-        _crear_bracket(clasificados[mid:], "oro")
+        await _crear_ladder_para(clasificados[(len(clasificados) + 1) // 2 :], "oro")
     else:
-        _crear_bracket(clasificados, "general")
-    await db.flush()
-    await _link_ronda_anterior(db, categoria_id, partidos_creados)
+        await _crear_ladder_para(clasificados, "general")
+
     await db.flush()
     return partidos_creados
 
-FASE_ORDER = ["grupos", "octavos", "cuartos", "semi", "final", "tercer_puesto"]
+async def _armar_ladder(db, categoria_id, slots, btype, partidos_creados):
+    """Construye la escala completa: la llave j de una fase alimenta la llave j//2
+    de la siguiente (local si j par, visitante si j impar). Los byes de la ronda
+    inicial avanzan directo y los partidos sin participantes conocidos se crean
+    sobre la marcha cuando completa (final y 3er puesto nacen vacíos)."""
+    from app.partidos.models import Partido as _P
+    res = await db.execute(
+        select(_P).where(
+            _P.categoria_id == categoria_id,
+            _P.fase.in_(FASES_ELIMINATORIA),
+            _P.estado == "finalizado",
+        )
+    )
+    finalizados = {(p.fase, p.llave, p.bracket_tipo) for p in res.scalars().all()}
+    B = len(slots)
+    niveles = B.bit_length() - 1
+    cur = slots
+    for level in range(niveles):
+        m = B >> (level + 1)
+        nxt = [None] * m
+        fase = _fase_de_llaves(m)
+        for j in range(m):
+            a = cur[2 * j]
+            b = cur[2 * j + 1]
+            if (fase, j, btype) in finalizados:
+                continue
+            if a is not None and b is not None:
+                p = Partido(categoria_id=categoria_id, fase=fase, llave=j, equipo_local_id=a, equipo_visit_id=b, estado="pendiente", bracket_tipo=btype)
+                db.add(p)
+                partidos_creados.append(p)
+            elif a is None and b is None:
+                continue
+            elif level == 0:
+                # bye en la ronda inicial: el clasificado pasa directo a la siguiente ronda
+                nxt[j] = a if a is not None else b
+            else:
+                # nivel interno con un solo lado conocido: crea la llave, el ganador de la rama contraria la completa
+                p = Partido(categoria_id=categoria_id, fase=fase, llave=j, equipo_local_id=a, equipo_visit_id=b, estado="pendiente", bracket_tipo=btype)
+                db.add(p)
+                partidos_creados.append(p)
+        cur = nxt
 
-async def _link_ronda_anterior(db: AsyncSession, categoria_id: str, nuevos: list[Partido]) -> None:
-    """Enlaza los partidos de la ronda anterior (pendientes/finalizados) hacia la ronda recién generada."""
-    from collections import defaultdict
-    por_fase_btype = defaultdict(list)
-    for p in nuevos:
-        por_fase_btype[(p.fase, p.bracket_tipo)].append(p)
-    for (fase, btype), matches in por_fase_btype.items():
-        idx = FASE_ORDER.index(fase) if fase in FASE_ORDER else -1
-        if idx <= 0:
-            continue
-        prev_fase = FASE_ORDER[idx - 1]
-        if prev_fase == "grupos":
-            continue  # los grupos alimentan el bracket vía rankings, no vía enlace partido->partido
+async def _avanzar_ganador(db: AsyncSession, partido: Partido):
+    """Auto-avance: al finalizar un partido de eliminación directa, el ganador
+    ocupa el asiento libre de la llave siguiente (llave j -> llave j//2, local
+    si j es par, visitante si es impar). Los perdedores de las semis van al 3er
+    puesto."""
+    if not partido.ganador_id or partido.estado != "finalizado":
+        return
+    if partido.fase not in NEXT_FASE or NEXT_FASE[partido.fase] is None:
+        return
+    llave = partido.llave or 0
+
+    if partido.fase == "semi":
+        if llave not in (0, 1):
+            return
         res = await db.execute(
             select(Partido).where(
-                Partido.categoria_id == categoria_id,
-                Partido.fase == prev_fase,
-                Partido.bracket_tipo == btype,
-                Partido.estado != "eliminado",
-            ).order_by(Partido.orden_en_round.asc(), Partido.id.asc())
+                Partido.categoria_id == partido.categoria_id,
+                Partido.fase == "semi",
+                Partido.llave == (1 - llave),
+            )
         )
-        prevs = res.scalars().all()
-        for i, nuevo in enumerate(matches):
-            if i * 2 < len(prevs):
-                prevs[i * 2].partido_siguiente_id = nuevo.id
-            if i * 2 + 1 < len(prevs):
-                prevs[i * 2 + 1].partido_siguiente_id = nuevo.id
+        gemela = res.scalar_one_or_none()
+        # solo tiene sentido el 3er puesto si la semi gemela es un partido real
+        if not gemela or not gemela.equipo_local_id or not gemela.equipo_visit_id:
+            return
+        perdedor = partido.equipo_visit_id if partido.ganador_id == partido.equipo_local_id else partido.equipo_local_id
+        res2 = await db.execute(
+            select(Partido).where(
+                Partido.categoria_id == partido.categoria_id,
+                Partido.fase == "tercer_puesto",
+                Partido.bracket_tipo == partido.bracket_tipo,
+            )
+        )
+        tercer = res2.scalars().first()
+        if not tercer:
+            tercer = Partido(categoria_id=partido.categoria_id, fase="tercer_puesto", llave=0, equipo_local_id=None, equipo_visit_id=None, estado="pendiente", bracket_tipo=partido.bracket_tipo)
+            db.add(tercer)
+        if llave % 2 == 0:
+            if tercer.equipo_local_id is None:
+                tercer.equipo_local_id = perdedor
+        else:
+            if tercer.equipo_visit_id is None:
+                tercer.equipo_visit_id = perdedor
+        await db.flush()
+        return
+
+    next_fase = NEXT_FASE[partido.fase]
+    next_llave = llave // 2
+    res = await db.execute(
+        select(Partido).where(
+            Partido.categoria_id == partido.categoria_id,
+            Partido.fase == next_fase,
+            Partido.llave == next_llave,
+            Partido.bracket_tipo == partido.bracket_tipo,
+        )
+    )
+    siguiente = res.scalar_one_or_none()
+    if not siguiente:
+        siguiente = Partido(categoria_id=partido.categoria_id, fase=next_fase, llave=next_llave, equipo_local_id=None, equipo_visit_id=None, estado="pendiente", bracket_tipo=partido.bracket_tipo)
+        db.add(siguiente)
+    if llave % 2 == 0:
+        if siguiente.equipo_local_id is None:
+            siguiente.equipo_local_id = partido.ganador_id
+    else:
+        if siguiente.equipo_visit_id is None:
+            siguiente.equipo_visit_id = partido.ganador_id
+    await db.flush()
 
 async def programar_partido(db: AsyncSession, partido_id: str, cancha: str = None, fecha_hora=None, is_organizador: bool = False) -> Partido:
     from uuid import UUID as _UUID
@@ -303,6 +413,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
             raise AppError(400, "SETS_INVALIDOS", "Estado inválido para 2 sets")
         partido.estado = "finalizado"
         await db.flush()
+        await _avanzar_ganador(db, partido)
         return partido
 
     sets_needed = (cat.sets_x_partido // 2) + 1
@@ -364,6 +475,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
 
     partido.estado = "finalizado"
     await db.flush()
+    await _avanzar_ganador(db, partido)
     return partido
 
 async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None):
@@ -411,6 +523,7 @@ async def crear_partido_manual(db: AsyncSession, data: dict) -> Partido:
         categoria_id=cat_id,
         grupo_id=data.get("grupo_id"),
         fase=data.get("fase") or "grupos",
+        llave=data.get("llave") or 0,
         equipo_local_id=data["equipo_local_id"],
         equipo_visit_id=data["equipo_visit_id"],
         cancha=data.get("cancha"),
@@ -429,7 +542,7 @@ async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict, is_o
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
     if partido.estado == "finalizado" and not is_organizador:
         raise AppError(400, "PARTIDO_FINALIZADO", "No se puede editar un partido finalizado - solo organizador")
-    for k in ["grupo_id", "fase", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo"]:
+    for k in ["grupo_id", "fase", "llave", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo"]:
         if k in data and data[k] is not None:
             setattr(partido, k, data[k])
     # validate equipos if changed
@@ -451,3 +564,337 @@ async def eliminar_partido(db: AsyncSession, partido_id: str, is_organizador: bo
         raise AppError(400, "PARTIDO_FINALIZADO", "No se puede eliminar un partido finalizado - solo organizador")
     await db.delete(partido)
     await db.flush()
+
+
+# ============================================================
+# Marcador en vivo (bitácora de eventos del juez)
+# ============================================================
+INDIVIDUAL_TIPOS = {"saque_directo", "defensa", "ataque", "bloqueo"}
+TIEMPOS_LIMITE = {"tiempo_muerto": 2, "tiempo_receso": 2, "tiempo_medico": None}
+
+async def _live_partido(db: AsyncSession, partido_id: str) -> Partido:
+    res = await db.execute(select(Partido).where(Partido.id == partido_id))
+    partido = res.scalar_one_or_none()
+    if not partido:
+        raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
+    return partido
+
+async def _live_eventos(db: AsyncSession, partido_id: str) -> list[PartidoEvento]:
+    res = await db.execute(
+        select(PartidoEvento).where(PartidoEvento.partido_id == partido_id).order_by(PartidoEvento.seq)
+    )
+    return list(res.scalars())
+
+def _set_target(cat: Categoria, set_num: int) -> int:
+    if cat.sets_x_partido in (3, 5) and set_num == cat.sets_x_partido:
+        return 15
+    return cat.puntos_x_set
+
+def _punto_numero_en_set(eventos: list[PartidoEvento], set_ganado_seq: int) -> int:
+    return sum(1 for e in eventos if not e.revocado and e.tipo == "punto" and e.seq > set_ganado_seq) + 1
+
+async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
+    """Estado completo y derivado del marcador en vivo."""
+    partido = await _live_partido(db, partido_id)
+    res = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(SetPartido.numero_set))
+    sets = list(res.scalars())
+    res = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no encontrada")
+    res_t = await db.execute(select(Rama.torneo_id).where(Rama.id == cat.rama_id))
+    torneo_id = res_t.scalar_one_or_none()
+
+    equipo_ids = [eid for eid in (partido.equipo_local_id, partido.equipo_visit_id) if eid]
+    equipos: dict = {}
+    atletas: dict = {}
+    orden: dict = {"local": [], "visitante": []}
+    if equipo_ids:
+        res = await db.execute(select(Equipo).where(Equipo.id.in_(equipo_ids)))
+        for eq in res.scalars():
+            equipos[eq.id] = {"id": eq.id, "nombre": eq.nombre}
+        res = await db.execute(select(Atleta).where(Atleta.equipo_id.in_(equipo_ids)))
+        for at in res.scalars():
+            atletas[at.id] = {"id": at.id, "nombre_completo": at.nombre_completo, "equipo_id": at.equipo_id}
+            lado = "local" if at.equipo_id == partido.equipo_local_id else "visitante"
+            orden[lado].append(at.id)
+
+    eventos = await _live_eventos(db, partido_id)
+    activos = [e for e in eventos if not e.revocado]
+
+    # Set actual = último set archivado + 1
+    current_set = (sets[-1].numero_set + 1) if sets else 1
+
+    # Puntos en juego: eventos 'punto' posteriores al último 'set_ganado' activo
+    ultimo_set_iter = 0
+    for e in activos:
+        if e.tipo == "set_ganado":
+            ultimo_set_iter = e.seq
+    score = {"local": 0, "visitante": 0}
+    ultimo_punto = None
+    for e in activos:
+        if e.tipo == "punto" and e.seq > ultimo_set_iter:
+            score[e.lado] = score.get(e.lado, 0) + 1
+            ultimo_punto = e
+
+    sets_ganados = {"local": 0, "visitante": 0}
+    for s in sets:
+        if s.ganador_id == partido.equipo_local_id:
+            sets_ganados["local"] += 1
+        elif s.ganador_id == partido.equipo_visit_id:
+            sets_ganados["visitante"] += 1
+
+    def _lado_de(atleta_id: str) -> str:
+        if not atleta_id or atleta_id not in atletas:
+            return ""
+        eq = atletas[atleta_id]["equipo_id"]
+        return "local" if eq == partido.equipo_local_id else ("visitante" if eq == partido.equipo_visit_id else "")
+
+    # Orden de saque por dupla (último orden_saque activo por lado, si existe)
+    for e in reversed(activos):
+        if e.tipo == "orden_saque" and e.lado in orden:
+            lista = (e.extra or {}).get("orden") or []
+            if len(lista) == 2:
+                orden[e.lado] = lista
+                break
+
+    # Saque actual: explícito (evento saque) o implícito (ganador del último punto)
+    saque = {"lado": None, "atleta_id": None}
+    ultimo_saque = None
+    for e in reversed(activos):
+        if e.tipo == "saque":
+            ultimo_saque = e
+            break
+    if ultimo_punto:
+        saque["lado"] = ultimo_punto.lado
+        saque["atleta_id"] = orden[ultimo_punto.lado][0] if orden.get(ultimo_punto.lado) else None
+    if ultimo_saque and (not ultimo_punto or _lado_de(ultimo_saque.atleta_id) == ultimo_punto.lado):
+        saque["lado"] = _lado_de(ultimo_saque.atleta_id) or (ultimo_saque.lado or saque["lado"])
+        saque["atleta_id"] = ultimo_saque.atleta_id
+    if ultimo_saque and not ultimo_punto and not saque["atleta_id"]:
+        lado_sc = _lado_de(ultimo_saque.atleta_id) or (ultimo_saque.lado or None)
+        saque["lado"] = lado_sc
+        saque["atleta_id"] = ultimo_saque.atleta_id if lado_sc else None
+
+    # Tiempos y tarjetas
+    tiempos = {"local": {"tiempo_muerto": 0, "tiempo_receso": 0, "tiempo_medico": 0},
+               "visitante": {"tiempo_muerto": 0, "tiempo_receso": 0, "tiempo_medico": 0}}
+    tarjetas = {"local": {"amarillas": 0, "rojas": 0}, "visitante": {"amarillas": 0, "rojas": 0}}
+    for e in activos:
+        if not e.lado or e.lado not in tiempos:
+            continue
+        if e.tipo in tiempos[e.lado]:
+            if e.seq > ultimo_set_iter:
+                tiempos[e.lado][e.tipo] += 1
+        elif e.tipo == "tarjeta_amarilla":
+            tarjetas[e.lado]["amarillas"] += 1
+        elif e.tipo == "tarjeta_roja":
+            tarjetas[e.lado]["rojas"] += 1
+
+    # Acciones individuales por atleta
+    individuales: dict = {}
+    for e in activos:
+        if e.tipo != "individual" or not e.atleta_id:
+            continue
+        ind = individuales.setdefault(e.atleta_id, {"saque_directo": 0, "defensa": 0, "ataque": 0, "bloqueo": 0})
+        accion = (e.extra or {}).get("tipo", "ataque")
+        if accion in ind:
+            ind[accion] += 1
+
+    # Lados invertidos (cambio de lado impar)
+    n_cambios = sum(1 for e in activos if e.tipo == "cambio_lado")
+
+    # ¿Se puede cerrar el set? (tope con/sin alargues)
+    target = _set_target(cat, current_set)
+    require2 = getattr(cat, "diferencia_dos_puntos", True)
+    l, v = score["local"], score["visitante"]
+    w = max(l, v)
+    lo = min(l, v)
+    can_cerrar = (w >= target and w - lo >= 2) if require2 else (w == target)
+
+    historial = [
+        {"id": e.id, "seq": e.seq, "tipo": e.tipo, "lado": e.lado, "atleta_id": e.atleta_id,
+         "razon": e.razon, "numero": e.numero, "extra": e.extra,
+         "creado_at": e.creado_at.isoformat() if e.creado_at else None}
+        for e in activos
+    ][-40:]
+
+    return {
+        "partido": {
+            "id": partido.id,
+            "estado": partido.estado,
+            "torneo_id": torneo_id,
+            "fase": partido.fase,
+            "llave": partido.llave,
+            "cancha": partido.cancha,
+            "fecha_hora": partido.fecha_hora.isoformat() if partido.fecha_hora else None,
+            "equipo_local_id": partido.equipo_local_id,
+            "equipo_visit_id": partido.equipo_visit_id,
+            "ganador_id": partido.ganador_id,
+            "categoria": {
+                "sets_x_partido": cat.sets_x_partido,
+                "puntos_x_set": cat.puntos_x_set,
+                "diferencia_dos_puntos": getattr(cat, "diferencia_dos_puntos", True),
+            },
+        },
+        "equipos": equipos,
+        "atletas": atletas,
+        "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets],
+        "current_set": current_set,
+        "set_target": target,
+        "score": score,
+        "sets_ganados": sets_ganados,
+        "saque": saque,
+        "orden": orden,
+        "tiempos": tiempos,
+        "tarjetas": tarjetas,
+        "individuales": individuales,
+        "lados_invertidos": n_cambios % 2 == 1,
+        "can_cerrar_set": can_cerrar,
+        "historial": historial,
+    }
+
+async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
+    """Registra una acción del juez y devuelve el snapshot actualizado."""
+    partido = await _live_partido(db, partido_id)
+    tipo = getattr(data, "tipo", data.get("tipo") if isinstance(data, dict) else None)
+    lado = getattr(data, "lado", None) if not isinstance(data, dict) else data.get("lado")
+    atleta_id = getattr(data, "atleta_id", None) if not isinstance(data, dict) else data.get("atleta_id")
+    razon = getattr(data, "razon", None) if not isinstance(data, dict) else data.get("razon")
+    numero = getattr(data, "numero", None) if not isinstance(data, dict) else data.get("numero")
+    extra = getattr(data, "extra", None) if not isinstance(data, dict) else data.get("extra")
+
+    if partido.estado == "finalizado" and tipo != "cambio_lado":
+        raise AppError(400, "PARTIDO_FINALIZADO", "Partido finalizado - no se pueden registrar acciones")
+
+    eventos = await _live_eventos(db, partido_id)
+    seq = (eventos[-1].seq + 1) if eventos else 1
+
+    if tipo == "inicio":
+        if partido.estado == "pendiente":
+            partido.estado = "en_juego"
+    elif tipo == "punto":
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", "Punto requiere lado local/visitante")
+        if not partido.equipo_local_id or not partido.equipo_visit_id:
+            raise AppError(400, "EQUIPOS_FALTANTES", "El partido no tiene los dos equipos")
+        ultimo_set_iter = 0
+        for e in eventos:
+            if not e.revocado and e.tipo == "set_ganado":
+                ultimo_set_iter = e.seq
+        numero = _punto_numero_en_set(eventos, ultimo_set_iter)
+    elif tipo == "set_ganado":
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", "Set ganado requiere lado local/visitante")
+        snap = await live_snapshot(db, partido_id)
+        if not snap["can_cerrar_set"]:
+            target = snap["set_target"]
+            raise AppError(400, "SET_INCOMPLETO", f"El set {snap['current_set']} aún no se completa (tope {target} con ventaja de 2)")
+        numero = snap["current_set"]
+    elif tipo in TIEMPOS_LIMITE:
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", f"{tipo} requiere lado local/visitante")
+        limite = TIEMPOS_LIMITE[tipo]
+        if limite is not None:
+            snap = await live_snapshot(db, partido_id)
+            usados = snap["tiempos"][lado][tipo]
+            if usados >= limite:
+                raise AppError(400, "LIMITE_TIEMPOS", f"{tipo}: máximo {limite} por set ({lado})")
+    elif tipo in ("tarjeta_amarilla", "tarjeta_roja"):
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", "Tarjeta requiere lado local/visitante")
+        if razon and razon not in ("demora", "conducta"):
+            raise AppError(400, "RAZON_INVALIDA", "razon debe ser 'demora' o 'conducta'")
+    elif tipo == "saque":
+        if not atleta_id:
+            raise AppError(400, "ATLETA_REQUERIDO", "Saque requiere atleta_id")
+        res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
+        if not res.scalar_one_or_none():
+            raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
+    elif tipo == "orden_saque":
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", "orden_saque requiere lado")
+        orden_lista = (extra or {}).get("orden") or []
+        if len(orden_lista) != 2 or not all(orden_lista):
+            raise AppError(400, "ORDEN_INVALIDO", "extra.orden debe tener 2 atleta_ids")
+    elif tipo == "cambio_lado":
+        pass
+    elif tipo == "individual":
+        if not atleta_id:
+            raise AppError(400, "ATLETA_REQUERIDO", "acción individual requiere atleta_id")
+        accion = (extra or {}).get("tipo", "")
+        if accion not in INDIVIDUAL_TIPOS:
+            raise AppError(400, "ACCION_INVALIDA", f"extra.tipo debe ser uno de {sorted(INDIVIDUAL_TIPOS)}")
+    else:
+        raise AppError(400, "TIPO_INVALIDO", f"Tipo de evento no soportado: {tipo}")
+
+    evento = PartidoEvento(partido_id=partido_id, seq=seq, tipo=tipo, lado=lado, atleta_id=atleta_id, razon=razon, numero=numero, extra=extra)
+    db.add(evento)
+    await db.flush()
+
+    if tipo == "set_ganado":
+        snap = await live_snapshot(db, partido_id)
+        set_num = snap["current_set"]
+        ganador = partido.equipo_local_id if snap["score"]["local"] > snap["score"]["visitante"] else partido.equipo_visit_id
+        sp = SetPartido(partido_id=partido_id, numero_set=set_num, pts_local=snap["score"]["local"], pts_visitante=snap["score"]["visitante"], ganador_id=ganador)
+        db.add(sp)
+        await db.flush()
+        res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+        cat = res_cat.scalar_one_or_none()
+        wins_l = snap["sets_ganados"]["local"] + (1 if ganador == partido.equipo_local_id else 0)
+        wins_v = snap["sets_ganados"]["visitante"] + (1 if ganador == partido.equipo_visit_id else 0)
+        if cat.sets_x_partido == 2:
+            if set_num >= 2:
+                pts_l = sum(s["pts_local"] for s in snap["sets"]) + snap["score"]["local"]
+                pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + snap["score"]["visitante"]
+                if wins_l == 2 or wins_v == 2:
+                    partido.ganador_id = partido.equipo_local_id if wins_l == 2 else partido.equipo_visit_id
+                elif wins_l == wins_v:
+                    partido.ganador_id = partido.equipo_local_id if pts_l > pts_v else (partido.equipo_visit_id if pts_v > pts_l else None)
+                partido.estado = "finalizado"
+        elif cat.sets_x_partido == 1:
+            partido.ganador_id = ganador
+            partido.estado = "finalizado"
+        else:
+            sets_needed = (cat.sets_x_partido // 2) + 1
+            if wins_l >= sets_needed:
+                partido.ganador_id = partido.equipo_local_id
+                partido.estado = "finalizado"
+            elif wins_v >= sets_needed:
+                partido.ganador_id = partido.equipo_visit_id
+                partido.estado = "finalizado"
+        await db.flush()
+        if partido.estado == "finalizado":
+            totales_snap = await live_snapshot(db, partido_id)
+            partido.tarjetas_amarillas_local = totales_snap["tarjetas"]["local"]["amarillas"]
+            partido.tarjetas_rojas_local = totales_snap["tarjetas"]["local"]["rojas"]
+            partido.tarjetas_amarillas_visit = totales_snap["tarjetas"]["visitante"]["amarillas"]
+            partido.tarjetas_rojas_visit = totales_snap["tarjetas"]["visitante"]["rojas"]
+            await db.flush()
+            await _avanzar_ganador(db, partido)
+
+    return await live_snapshot(db, partido_id)
+
+async def live_undo(db: AsyncSession, partido_id: str) -> dict:
+    """Revoca la última acción del juez (deshacer)."""
+    partido = await _live_partido(db, partido_id)
+    res = await db.execute(
+        select(PartidoEvento).where(PartidoEvento.partido_id == partido_id, PartidoEvento.revocado == False).order_by(desc(PartidoEvento.seq))
+    )
+    ultimo = res.scalars().first()
+    if not ultimo:
+        raise AppError(400, "NADA_PARA_DESHACER", "No hay acciones para deshacer")
+    ultimo.revocado = True
+    if ultimo.tipo == "set_ganado":
+        res2 = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(desc(SetPartido.numero_set)).limit(1))
+        sp = res2.scalars().first()
+        if sp:
+            await db.delete(sp)
+        if partido.estado == "finalizado":
+            partido.estado = "en_juego"
+            partido.ganador_id = None
+    elif ultimo.tipo == "inicio":
+        if partido.estado == "en_juego":
+            partido.estado = "pendiente"
+    await db.flush()
+    return await live_snapshot(db, partido_id)
