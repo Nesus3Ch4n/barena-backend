@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.shared.database import get_db
 from app.shared.security import get_current_user
-from app.rankings.service import list_rankings_grupo, list_rankings_categoria_grupo, list_rankings_general, list_rankings_torneo
+from app.rankings.service import list_rankings_grupo, list_rankings_categoria_grupo, list_rankings_general, list_rankings_torneo, global_ranking
 
 router = APIRouter(prefix="/rankings", tags=["rankings"])
 categoria_router = APIRouter(prefix="/categorias/{categoria_id}/rankings", tags=["rankings"])
 torneo_router = APIRouter(prefix="/torneos/{torneo_id}/rankings", tags=["rankings"])
+global_router = APIRouter(prefix="/public/rankings", tags=["rankings"])
 
 @router.get("/grupo/{grupo_id}", response_model=dict)
 async def grupo(grupo_id: str, db: AsyncSession = Depends(get_db)):
@@ -27,3 +28,8 @@ async def general(categoria_id: str, db: AsyncSession = Depends(get_db)):
 async def torneo_rankings(torneo_id: str, db: AsyncSession = Depends(get_db)):
     data = await list_rankings_torneo(db, torneo_id)
     return {"success": True, "data": [{"categoria_id": r.categoria_id, "equipo_id": r.equipo_id, "posicion": r.posicion} for r in data], "error": None}
+
+@global_router.get("", response_model=dict)
+async def global_public_ranking(db: AsyncSession = Depends(get_db)):
+    data = await global_ranking(db)
+    return {"success": True, "data": data, "error": None}

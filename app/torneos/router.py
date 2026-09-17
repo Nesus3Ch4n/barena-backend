@@ -206,6 +206,23 @@ async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_cu
     # shortcut to set fixture_visible true
     return await patch_visibilidad(torneo_id, VisibilidadUpdate(fixture_visible=True), request, user, db)
 
+@public_router.get("/torneos", response_model=dict)
+async def listar_public_torneos(db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(Torneo).where(Torneo.publico == True).order_by(Torneo.creado_en.desc()))
+    torneos = res.scalars().all()
+    data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "ciudad": t.ciudad, "sede": t.sede, "fecha_inicio": str(t.fecha_inicio) if t.fecha_inicio else None, "fecha_fin": str(t.fecha_fin) if t.fecha_fin else None, "estado": t.estado, "publico": t.publico} for t in torneos]
+    return {"success": True, "data": data, "error": None}
+
+@public_router.get("/torneos/{torneo_id}", response_model=dict)
+async def detalle_public_torneo(torneo_id: str, db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    result = await get_torneo_detail(db, torneo_id)
+    torneo = result["torneo"]
+    if not torneo.publico:
+        raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público", {"id": torneo_id})
+    ramas_data = [{"id": r.id, "tipo": r.tipo, "nombre_custom": r.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato} for c in cats]} for r, cats in result["ramas"]]
+    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado}, "ramas": ramas_data}, "error": None}
+
 @public_router.get("/torneo/{slug}", response_model=dict)
 async def public_torneo(slug: str, db: AsyncSession = Depends(get_db)):
     torneo = await get_public_by_slug(db, slug)

@@ -18,7 +18,7 @@ from app.equipos.router import router as equipos_router, equipo_router as equipo
 from app.atletas.router import router as atletas_router
 from app.partidos.router import router as partidos_router, torneo_partidos_router, categoria_fixture_router
 from app.estadisticas.router import router as estadisticas_router, atleta_router as estadisticas_atleta_router
-from app.rankings.router import router as rankings_router, categoria_router as rankings_categoria_router, torneo_router as rankings_torneo_router
+from app.rankings.router import router as rankings_router, categoria_router as rankings_categoria_router, torneo_router as rankings_torneo_router, global_router as rankings_global_router
 from app.reportes.router import router as reportes_router
 from app.config.router import router as config_router
 from app.admin.router import router as admin_perfiles_router
@@ -56,6 +56,7 @@ app.include_router(categoria_fixture_router, prefix="/api/v1")
 app.include_router(estadisticas_atleta_router, prefix="/api/v1")
 app.include_router(rankings_categoria_router, prefix="/api/v1")
 app.include_router(rankings_torneo_router, prefix="/api/v1")
+app.include_router(rankings_global_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health(request: Request):
