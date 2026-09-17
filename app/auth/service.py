@@ -28,6 +28,22 @@ async def get_profile(db: AsyncSession, user_id: str):
     result = await db.execute(select(Profile).where(Profile.id == user_id))
     return result.scalar_one_or_none()
 
+async def update_profile_for_user(db: AsyncSession, user_id: str, data) -> Profile:
+    from app.auth.schemas import ProfileSelfUpdate
+    assert isinstance(data, ProfileSelfUpdate)
+    upd = data.model_dump(exclude_unset=True, exclude_none=True)
+    if "nombre_completo" in upd:
+        upd["nombre_completo"] = upd["nombre_completo"].strip()
+    profile = await get_profile(db, user_id)
+    if not profile:
+        profile = Profile(id=user_id, nombre_completo=upd.pop("nombre_completo", "Sin nombre"))
+        db.add(profile)
+        await db.flush()
+    for k, v in upd.items():
+        setattr(profile, k, v)
+    await db.flush()
+    return profile
+
 async def _store_refresh_token(db: AsyncSession, user_id: str, token_str: str) -> None:
     payload = verify_token(token_str)
     jti = payload.get("jti")

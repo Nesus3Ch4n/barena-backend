@@ -5,8 +5,8 @@ from sqlalchemy import select
 
 from app.shared.database import get_db
 from app.shared.security import get_current_user
-from app.auth.schemas import RegisterIn, LoginIn, RefreshIn, TokenOut, MeOut, ReclamarIn
-from app.auth.service import register_user, login_user, refresh_token, logout_user, reclamar_atleta, get_roles_for_user, get_profile
+from app.auth.schemas import RegisterIn, LoginIn, RefreshIn, TokenOut, MeOut, ReclamarIn, ProfileSelfUpdate
+from app.auth.service import register_user, login_user, refresh_token, logout_user, reclamar_atleta, get_roles_for_user, get_profile, update_profile_for_user
 from app.auth.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -45,6 +45,22 @@ async def me(request: Request, user: User = Depends(get_current_user), db: Async
             "id": user.id,
             "email": user.email,
             "nombre_completo": profile.nombre_completo if profile else None,
+            "roles": roles,
+            "created_at": user.created_at.isoformat() if user.created_at else datetime.now(timezone.utc).isoformat(),
+        },
+        "error": None,
+    }
+
+@router.patch("/me", response_model=dict)
+async def patch_me(body: ProfileSelfUpdate, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    profile = await update_profile_for_user(db, user.id, body)
+    roles = await get_roles_for_user(db, user.id)
+    return {
+        "success": True,
+        "data": {
+            "id": user.id,
+            "email": user.email,
+            "nombre_completo": profile.nombre_completo,
             "roles": roles,
             "created_at": user.created_at.isoformat() if user.created_at else datetime.now(timezone.utc).isoformat(),
         },

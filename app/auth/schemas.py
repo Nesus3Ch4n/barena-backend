@@ -28,3 +28,8 @@ class MeOut(BaseModel):
 
 class ReclamarIn(BaseModel):
     codigo: str = Field(min_length=8, max_length=8)
+
+class ProfileSelfUpdate(BaseModel):
+    nombre_completo: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    avatar_url: Optional[str] = Field(default=None, max_length=500)
+    telefono: Optional[str] = Field(default=None, max_length=20)
