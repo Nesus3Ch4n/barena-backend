@@ -1,11 +1,12 @@
 import re
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert
+from sqlalchemy import select, insert, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from app.torneos.models import Torneo, Rama, Categoria, Deporte
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
+from app.equipos.models import Equipo
 from app.shared.errors import AppError, NotFound
 from app.auth.models import user_roles
 
@@ -207,6 +208,38 @@ async def delete_torneo(db: AsyncSession, torneo_id: str):
         raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
     await db.delete(torneo)
     await db.flush()
+
+async def list_torneos_publicos(db: AsyncSession):
+    res = await db.execute(select(Torneo).where(Torneo.publico == True).order_by(Torneo.creado_en.desc()))
+    torneos = res.scalars().all()
+    ids = [t.id for t in torneos]
+    if not ids:
+        return []
+    ramas = (await db.execute(
+        select(Rama.torneo_id, Rama.tipo, Categoria.nombre)
+        .join(Categoria, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id.in_(ids), Rama.activa == True)
+    )).all()
+    equipos = (await db.execute(
+        select(Rama.torneo_id, func.count(Equipo.id))
+        .join(Categoria, Categoria.rama_id == Rama.id)
+        .join(Equipo, Equipo.categoria_id == Categoria.id)
+        .where(Rama.torneo_id.in_(ids), Equipo.estado == "aprobado")
+        .group_by(Rama.torneo_id)
+    )).all()
+    cats_by_torneo = {}
+    for torneo_id, tipo, nombre in ramas:
+        cats_by_torneo.setdefault(torneo_id, []).append({"tipo": tipo, "nombre": nombre})
+    equipos_by_torneo = {tid: count for tid, count in equipos}
+    return [{
+        "id": t.id, "nombre": t.nombre, "slug": t.slug,
+        "ciudad": t.ciudad, "sede": t.sede,
+        "fecha_inicio": str(t.fecha_inicio) if t.fecha_inicio else None,
+        "fecha_fin": str(t.fecha_fin) if t.fecha_fin else None,
+        "estado": t.estado, "publico": t.publico,
+        "categorias": cats_by_torneo.get(t.id, []),
+        "equipos": equipos_by_torneo.get(t.id, 0),
+    } for t in torneos]
 
 # ---------- Ramas ----------
 async def create_rama(db: AsyncSession, torneo_id: str, data) -> Rama:

@@ -6,7 +6,7 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -208,9 +208,7 @@ async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_cu
 
 @public_router.get("/torneos", response_model=dict)
 async def listar_public_torneos(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(Torneo).where(Torneo.publico == True).order_by(Torneo.creado_en.desc()))
-    torneos = res.scalars().all()
-    data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "ciudad": t.ciudad, "sede": t.sede, "fecha_inicio": str(t.fecha_inicio) if t.fecha_inicio else None, "fecha_fin": str(t.fecha_fin) if t.fecha_fin else None, "estado": t.estado, "publico": t.publico} for t in torneos]
+    data = await list_torneos_publicos(db)
     return {"success": True, "data": data, "error": None}
 
 @public_router.get("/torneos/{torneo_id}", response_model=dict)
