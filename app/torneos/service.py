@@ -286,10 +286,11 @@ async def delete_rama(db: AsyncSession, rama_id: str):
     rama = res.scalar_one_or_none()
     if not rama:
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe", {"id": rama_id})
-    # check if has categorias with equipos
+    # check if has categorias with equipos (no rechazados/eliminados)
     from sqlalchemy import text
-    cnt = await db.execute(text("SELECT count(*) FROM categorias c JOIN equipos e ON e.categoria_id=c.id WHERE c.rama_id=:rid"), {"rid": rama_id})
-    if cnt.scalar() and cnt.scalar() > 0:
+    cnt = await db.execute(text("SELECT count(*) FROM categorias c JOIN equipos e ON e.categoria_id=c.id WHERE c.rama_id=:rid AND e.estado != 'eliminado'"), {"rid": rama_id})
+    n = cnt.scalar()
+    if n and n > 0:
         raise AppError(400, "RAMA_HAS_EQUIPOS", "No se puede eliminar rama con equipos inscritos")
     await db.delete(rama)
     await db.flush()
@@ -333,13 +334,15 @@ async def delete_categoria(db: AsyncSession, categoria_id: str):
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
     from sqlalchemy import text
-    # check equipos
-    cnt = await db.execute(text("SELECT count(*) FROM equipos WHERE categoria_id=:cid"), {"cid": categoria_id})
-    if cnt.scalar() and cnt.scalar() > 0:
+    # check equipos (no rechazados/eliminados)
+    cnt = await db.execute(text("SELECT count(*) FROM equipos WHERE categoria_id=:cid AND estado != 'eliminado'"), {"cid": categoria_id})
+    n = cnt.scalar()
+    if n and n > 0:
         raise AppError(400, "CATEGORIA_HAS_EQUIPOS", "No se puede eliminar categoría con equipos inscritos")
     # check partidos
     cnt2 = await db.execute(text("SELECT count(*) FROM partidos WHERE categoria_id=:cid"), {"cid": categoria_id})
-    if cnt2.scalar() and cnt2.scalar() > 0:
+    n2 = cnt2.scalar()
+    if n2 and n2 > 0:
         raise AppError(400, "CATEGORIA_HAS_PARTIDOS", "No se puede eliminar categoría con partidos generados")
     await db.delete(cat)
     await db.flush()
