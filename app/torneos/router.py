@@ -218,8 +218,8 @@ async def detalle_public_torneo(torneo_id: str, db: AsyncSession = Depends(get_d
     torneo = result["torneo"]
     if not torneo.publico:
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público", {"id": torneo_id})
-    ramas_data = [{"id": r.id, "tipo": r.tipo, "nombre_custom": r.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato} for c in cats]} for r, cats in result["ramas"]]
-    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado}, "ramas": ramas_data}, "error": None}
+    ramas_data = [{"id": r.id, "tipo": r.tipo, "nombre_custom": r.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "clasificacion": getattr(c, "clasificacion", "grupos"), "bracket_tipo": getattr(c, "bracket_tipo", "general"), "sets_x_partido": c.sets_x_partido, "puntos_x_set": c.puntos_x_set, "diferencia_dos_puntos": getattr(c, "diferencia_dos_puntos", True), "ranking_general_enabled": getattr(c, "ranking_general_enabled", True)} for c in cats]} for r, cats in result["ramas"]]
+    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad}, "ramas": ramas_data}, "error": None}
 
 @public_router.get("/torneo/{slug}", response_model=dict)
 async def public_torneo(slug: str, db: AsyncSession = Depends(get_db)):
