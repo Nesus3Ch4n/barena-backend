@@ -194,6 +194,15 @@ async def borrar_partidos_fase_grupos(db: AsyncSession, categoria_id: str) -> in
         await db.flush()
     return len(ids)
 
+async def borrar_partidos_bracket(db: AsyncSession, categoria_id: str) -> int:
+    """Elimina todos los partidos del bracket eliminatorio de una categoría (fase != 'grupos')."""
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase != "grupos"))
+    ids = [p.id for p in res.scalars().all()]
+    if ids:
+        await db.execute(delete(Partido).where(Partido.id.in_(ids)))
+        await db.flush()
+    return len(ids)
+
 async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
