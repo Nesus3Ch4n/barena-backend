@@ -185,6 +185,15 @@ async def eliminar_grupo(db: AsyncSession, grupo_id: str) -> None:
     await db.delete(grupo)
     await db.flush()
 
+async def borrar_partidos_fase_grupos(db: AsyncSession, categoria_id: str) -> int:
+    """Elimina todos los partidos de la fase de grupos de una categoría."""
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase == "grupos"))
+    ids = [p.id for p in res.scalars().all()]
+    if ids:
+        await db.execute(delete(Partido).where(Partido.id.in_(ids)))
+        await db.flush()
+    return len(ids)
+
 async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
