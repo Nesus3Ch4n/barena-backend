@@ -7,6 +7,10 @@ class GenerarFixtureIn(BaseModel):
     sincronizar_grupos: bool = False
     bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro|diamante_oro)$")
 
+class AvanzarIn(BaseModel):
+    confirmar: bool = False
+    emparejamiento: Optional[str] = Field(default=None, pattern="^(directo|ladder)$")
+
 class GrupoUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=1, max_length=10)
     orden: Optional[int] = Field(default=None, ge=1, le=32)

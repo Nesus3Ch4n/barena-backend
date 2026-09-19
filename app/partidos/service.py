@@ -275,7 +275,7 @@ async def sincronizar_categoria(db: AsyncSession, categoria_id: str) -> dict:
         "partidos_eliminados": partidos_eliminados,
     }
 
-async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
+async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, confirmar: bool = False, emparejamiento: str = None) -> tuple:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
     if not cat:
@@ -283,10 +283,11 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
 
     clasificacion = getattr(cat, "clasificacion", "grupos") or "grupos"
     clasificados = []
+    cupo = getattr(cat, "clasificados", None)
 
     if clasificacion == "ranking_general":
         # Todas las duplas aprobadas, ordenadas por ranking general (primero
-        # las posicionadas, después el resto por nombre).
+        # las posicionadas, después el resto por nombre). Con corte global top-N.
         from app.rankings.models import RankingGeneral
         ranked_pos = {}
         res = await db.execute(
@@ -297,6 +298,8 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
         res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id, Equipo.estado == "aprobado"))
         equipos = res.scalars().all()
         clasificados = sorted(equipos, key=lambda e: (ranked_pos.get(e.id, 10 ** 9), e.nombre))
+        if cupo and cupo > 0:
+            clasificados = clasificados[:cupo]
     else:
         # Clasificación por grupos: los avance_x_grupo primeros de cada grupo.
         res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
@@ -319,6 +322,11 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
         raise AppError(400, "CLASIFICADOS_INSUFICIENTES", "Se necesitan al menos 2 clasificados", {"count": len(clasificados)})
 
     efectivo_bracket = getattr(cat, "bracket_tipo", "general") or "general"
+    # Protección contra duplicados: si ya hay llaves pendientes, exigir confirmación.
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(FASES_ELIMINATORIA), Partido.estado == "pendiente"))
+    pendientes_previos = len(res.scalars().all())
+    if pendientes_previos and not confirmar:
+        raise AppError(409, "BRACKET_YA_GENERADO", "El bracket ya fue generado. Confirme para regenerarlo (se eliminan solo llaves pendientes)", {"pendientes": pendientes_previos})
 # Borrar llaves pendientes previas para regenerar desde cero.
     await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(FASES_ELIMINATORIA), Partido.estado == "pendiente"))
     await db.flush()
@@ -335,19 +343,33 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> 
                 slots[pos] = team.id
         await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
 
+    async def _crear_directo_para(eqs, btype):
+        # Emparejamiento directo por reglamento: 1vN, 2vN-1, ... con byes si no es potencia de 2.
+        n = len(eqs)
+        B = _siguiente_pot2(n)
+        slots: list = [None] * B
+        for i in range(n // 2):
+            slots[2 * i] = eqs[i].id
+            slots[2 * i + 1] = eqs[n - 1 - i].id
+        if n % 2 == 1:
+            slots[n - 1] = eqs[n - 1].id
+        await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
+
+    emp = emparejamiento or "ladder"
+    crear = _crear_directo_para if emp == "directo" else _crear_ladder_para
     if efectivo_bracket == "diamante_oro":
         mid = (len(clasificados) + 1) // 2
-        await _crear_ladder_para(clasificados[:mid], "diamante")
-        await _crear_ladder_para(clasificados[mid:], "oro")
+        await crear(clasificados[:mid], "diamante")
+        await crear(clasificados[mid:], "oro")
     elif efectivo_bracket == "diamante":
-        await _crear_ladder_para(clasificados[: (len(clasificados) + 1) // 2], "diamante")
+        await crear(clasificados[:(len(clasificados) + 1) // 2], "diamante")
     elif efectivo_bracket == "oro":
-        await _crear_ladder_para(clasificados[(len(clasificados) + 1) // 2 :], "oro")
+        await crear(clasificados[(len(clasificados) + 1) // 2 :], "oro")
     else:
-        await _crear_ladder_para(clasificados, "general")
+        await crear(clasificados, "general")
 
     await db.flush()
-    return partidos_creados
+    return partidos_creados, pendientes_previos
 
 async def _armar_ladder(db, categoria_id, slots, btype, partidos_creados):
     """Construye la escala completa: la llave j de una fase alimenta la llave j//2
