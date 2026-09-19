@@ -600,13 +600,12 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
         loser_pts = min(s["pts_local"], s["pts_visitante"])
         if s["pts_local"] == s["pts_visitante"]:
             raise AppError(400, "SET_EMPATE", "Set no puede empatar")
-        # sin alargues: tope es lo elegido (15 o 21)
-        if winner_pts != req:
-            raise AppError(400, "PTS_TOPE", f"Set {s['numero_set']} tope {req}: ganador debe tener {req} (sin alargues)")
-        if winner_pts > req or loser_pts >= req:
-            raise AppError(400, "PTS_TOPE", f"Tope máximo {req}")
-        if getattr(cat, "diferencia_dos_puntos", True) and winner_pts - loser_pts < 2:
-            raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']} a {req} requiere ventaja de 2 ({req}-{req-1} no, {req}-{req-2} sí)")
+        # con alargue: mínimo req puntos y ventaja de 2, sin límite máximo
+        if getattr(cat, "diferencia_dos_puntos", True):
+            if winner_pts < req or winner_pts - loser_pts < 2:
+                raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']}: se gana con mínimo {req} y ventaja de 2 (alargue sin límite)")
+        elif winner_pts < req:
+            raise AppError(400, "PTS_TOPE", f"Set {s['numero_set']}: ganador debe llegar mínimo a {req}")
 
     # Upsert sets (don't delete history)
     for s in sets:
