@@ -6,12 +6,25 @@ from typing import List
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
-from app.equipos.schemas import EquipoCreate, EquipoAprobarIn, EquipoUpdate
-from app.equipos.service import create_equipo, list_equipos, aprobar_equipo, rechazar_equipo, get_equipo_atletas, update_equipo, verify_torneo_owner
+from app.equipos.schemas import EquipoCreate, EquipoAprobarIn, EquipoUpdate, ReemplazoIn
+from app.equipos.service import create_equipo, list_equipos, aprobar_equipo, rechazar_equipo, get_equipo_atletas, update_equipo, retirar_equipo, reemplazar_equipo, verify_torneo_owner
 import csv, io
 
 router = APIRouter(prefix="/torneos/{torneo_id}/equipos", tags=["equipos"])
 equipo_router = APIRouter(prefix="/equipos", tags=["equipos"])
+
+async def _verify_equipo_owner(db: AsyncSession, equipo_id: str, user_id: str, is_super: bool, is_org: bool = False):
+    from app.equipos.models import Equipo
+    from app.torneos.models import Categoria, Rama
+    res = await db.execute(select(Equipo).where(Equipo.id == equipo_id))
+    eq = res.scalar_one_or_none()
+    if not eq:
+        raise NotFound("EQUIPO_NOT_FOUND", "Equipo no existe", {"id": equipo_id})
+    res2 = await db.execute(select(Rama.torneo_id).join(Categoria, Categoria.rama_id == Rama.id).where(Categoria.id == eq.categoria_id))
+    tid = res2.scalar_one_or_none()
+    if tid:
+        await verify_torneo_owner(db, str(tid), user_id, is_super, is_org)
+    return eq
 
 @router.post("", status_code=201, response_model=dict)
 async def crear_equipo(torneo_id: str, body: EquipoCreate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -97,6 +110,30 @@ async def actualizar_equipo(equipo_id: str, body: EquipoUpdate, request: Request
         await verify_torneo_owner(db, str(tid), user.id, is_super, is_org)
     equipo = await update_equipo(db, equipo_id, body, user.id, is_super, is_org)
     return {"success": True, "data": {"id": equipo.id, "nombre": equipo.nombre, "categoria_id": equipo.categoria_id, "grupo_id": equipo.grupo_id, "estado": equipo.estado}, "error": None}
+
+@equipo_router.patch("/{equipo_id}/retirar", response_model=dict)
+async def retirar(equipo_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    await _verify_equipo_owner(db, equipo_id, user.id, is_super, is_org)
+    data = await retirar_equipo(db, equipo_id)
+    return {"success": True, "data": data, "error": None}
+
+@equipo_router.delete("/{equipo_id}", response_model=dict)
+async def eliminar(equipo_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    await _verify_equipo_owner(db, equipo_id, user.id, is_super, is_org)
+    data = await retirar_equipo(db, equipo_id)
+    return {"success": True, "data": data, "error": None}
+
+@equipo_router.post("/{equipo_id}/reemplazar", response_model=dict)
+async def reemplazar(equipo_id: str, body: ReemplazoIn, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    await _verify_equipo_owner(db, equipo_id, user.id, is_super, is_org)
+    data = await reemplazar_equipo(db, equipo_id, body)
+    return {"success": True, "data": data, "error": None}
 
 @equipo_router.get("/{equipo_id}/atletas", response_model=dict)
 async def atletas_equipo(equipo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):

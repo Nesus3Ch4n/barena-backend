@@ -26,6 +26,13 @@ class EquipoUpdate(BaseModel):
     foto_url: Optional[str] = None
     grupo_id: Optional[str] = None
     seed: Optional[int] = Field(None, ge=1)
+    forzar: Optional[bool] = False
+
+class ReemplazoIn(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=2, max_length=80)
+    ciudad: Optional[str] = None
+    atletas: List[AtletaIn] = Field(min_length=2, max_length=3)
+    modo: Optional[str] = Field(None, pattern="^(conservar_historial|nueva_participacion)$")
 
 class EquipoOut(BaseModel):
     id: str

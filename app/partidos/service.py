@@ -1,6 +1,6 @@
 import itertools, math, random
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, desc
+from sqlalchemy import select, delete, desc, or_
 from app.partidos.models import Partido, SetPartido, PartidoEvento
 from app.torneos.models import Categoria, Grupo, Rama
 from app.equipos.models import Equipo
@@ -202,6 +202,78 @@ async def borrar_partidos_bracket(db: AsyncSession, categoria_id: str) -> int:
         await db.execute(delete(Partido).where(Partido.id.in_(ids)))
         await db.flush()
     return len(ids)
+
+async def sincronizar_categoria(db: AsyncSession, categoria_id: str) -> dict:
+    """Sincronización incremental de la fase de grupos: elimina solo pendientes
+    obsoletos (duplas retiradas/movidas) y crea solo los pares faltantes.
+    Nunca toca partidos en juego o finalizados. Devuelve contadores reales."""
+    res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
+    cat = res.scalar_one_or_none()
+    if not cat:
+        raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no existe", {"id": categoria_id})
+    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
+    grupos = list(res.scalars().all())
+    res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id))
+    equipos = list(res.scalars().all())
+    aprobados = {e.id: e for e in equipos if e.estado == "aprobado"}
+    grupo_de = {e.id: e.grupo_id for e in aprobados.values()}
+
+    duplas_nuevas: set = set()
+    duplas_retiradas: set = set()
+    duplas_actualizadas: set = set()
+    partidos_nuevos = 0
+    partidos_eliminados = 0
+    partidos_actualizados = 0
+
+    if cat.formato in ("grupos", "round_robin"):
+        res = await db.execute(select(Partido).where(
+            Partido.categoria_id == categoria_id,
+            Partido.fase == "grupos",
+            Partido.estado == "pendiente",
+        ))
+        pendientes = list(res.scalars().all())
+        for p in pendientes:
+            l_ok = p.equipo_local_id in aprobados
+            v_ok = p.equipo_visit_id in aprobados
+            if not l_ok or not v_ok:
+                # participante retirado/eliminado o ya no aprobado
+                fuera = {p.equipo_local_id, p.equipo_visit_id} - set(aprobados)
+                duplas_retiradas.update(x for x in fuera if x)
+                await db.delete(p)
+                partidos_eliminados += 1
+            elif grupo_de.get(p.equipo_local_id) != p.grupo_id or grupo_de.get(p.equipo_visit_id) != p.grupo_id:
+                # dupla movida de grupo: el partido quedó en el grupo viejo
+                duplas_actualizadas.update([p.equipo_local_id, p.equipo_visit_id])
+                await db.delete(p)
+                partidos_eliminados += 1
+        await db.flush()
+        # crear pares faltantes por grupo
+        for grupo in grupos:
+            en_grupo = [e for e in aprobados.values() if e.grupo_id == grupo.id]
+            res = await db.execute(select(Partido).where(
+                Partido.categoria_id == categoria_id,
+                Partido.grupo_id == grupo.id,
+                Partido.fase == "grupos",
+                Partido.estado == "pendiente",
+            ))
+            pares_ok = set()
+            for p in res.scalars().all():
+                if p.equipo_local_id and p.equipo_visit_id:
+                    pares_ok.add(tuple(sorted((p.equipo_local_id, p.equipo_visit_id))))
+            for a, b in itertools.combinations(en_grupo, 2):
+                if tuple(sorted((a.id, b.id))) not in pares_ok:
+                    db.add(Partido(categoria_id=categoria_id, grupo_id=grupo.id, fase="grupos", equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo="general"))
+                    partidos_nuevos += 1
+                    duplas_nuevas.update([a.id, b.id])
+        await db.flush()
+    return {
+        "duplas_actualizadas": len(duplas_actualizadas),
+        "duplas_nuevas": len(duplas_nuevas),
+        "duplas_retiradas": len(duplas_retiradas),
+        "partidos_actualizados": partidos_actualizados,
+        "partidos_nuevos": partidos_nuevos,
+        "partidos_eliminados": partidos_eliminados,
+    }
 
 async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
