@@ -43,7 +43,7 @@ def _seats_por_seed(n):
 def _fase_de_llaves(m):
     return FASE_POR_LLAVES.get(m, "ronda")
 
-async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str = None) -> list[Partido]:
+async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str = None, crear_grupos: bool = True, sincronizar_grupos: bool = False) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))
     cat = res.scalar_one_or_none()
     if not cat:
@@ -78,10 +78,27 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
         n = cat.equipos_x_grupo
         num_grupos = math.ceil(len(equipos) / n)
         res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id))
-        grupos = res.scalars().all()
-        if len(grupos) != num_grupos:
-            await db.execute(delete(Grupo).where(Grupo.categoria_id == categoria_id))
-            await db.flush()
+        grupos = list(res.scalars().all())
+        if sincronizar_grupos or (crear_grupos and len(grupos) != num_grupos):
+            # Sync total: elimina grupos sobrantes con sus partidos pendientes,
+            # crea los faltantes y reasigna equipos huerfanos.
+            if sincronizar_grupos and len(grupos) > num_grupos:
+                sobrantes = sorted(grupos, key=lambda g: g.orden or 0)[num_grupos:]
+                for g in sobrantes:
+                    res_p = await db.execute(select(Partido).where(Partido.grupo_id == g.id, Partido.estado != "pendiente"))
+                    if res_p.scalars().first():
+                        raise AppError(400, "GRUPO_CON_PARTIDOS", "El grupo tiene partidos en juego o finalizados", {"grupo": g.nombre})
+                    await db.execute(delete(Partido).where(Partido.grupo_id == g.id))
+                    res_eq = await db.execute(select(Equipo).where(Equipo.grupo_id == g.id))
+                    for eq in res_eq.scalars().all():
+                        eq.grupo_id = None
+                    await db.delete(g)
+                await db.flush()
+                res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
+                grupos = list(res.scalars().all())
+            if len(grupos) != num_grupos:
+                await db.execute(delete(Grupo).where(Grupo.categoria_id == categoria_id))
+                await db.flush()
             grupos = []
             for i in range(num_grupos):
                 g = Grupo(categoria_id=categoria_id, nombre=chr(65+i), orden=i+1)
@@ -136,6 +153,37 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
 
     await db.flush()
     return partidos_creados
+
+async def actualizar_grupo(db: AsyncSession, grupo_id: str, data: dict) -> Grupo:
+    res = await db.execute(select(Grupo).where(Grupo.id == grupo_id))
+    grupo = res.scalar_one_or_none()
+    if not grupo:
+        raise NotFound("GRUPO_NOT_FOUND", "Grupo no existe", {"id": grupo_id})
+    if data.get("nombre"):
+        nombre = data["nombre"].strip().upper()[:10]
+        res2 = await db.execute(select(Grupo).where(Grupo.categoria_id == grupo.categoria_id, Grupo.nombre == nombre, Grupo.id != grupo_id))
+        if res2.scalar_one_or_none():
+            raise AppError(400, "GRUPO_DUPLICADO", "Ya existe un grupo con ese nombre", {"nombre": nombre})
+        grupo.nombre = nombre
+    if data.get("orden") is not None:
+        grupo.orden = data["orden"]
+    await db.flush()
+    return grupo
+
+async def eliminar_grupo(db: AsyncSession, grupo_id: str) -> None:
+    res = await db.execute(select(Grupo).where(Grupo.id == grupo_id))
+    grupo = res.scalar_one_or_none()
+    if not grupo:
+        raise NotFound("GRUPO_NOT_FOUND", "Grupo no existe", {"id": grupo_id})
+    res_p = await db.execute(select(Partido).where(Partido.grupo_id == grupo_id, Partido.estado != "pendiente"))
+    if res_p.scalars().first():
+        raise AppError(400, "GRUPO_CON_PARTIDOS", "El grupo tiene partidos en juego o finalizados", {"grupo": grupo.nombre})
+    await db.execute(delete(Partido).where(Partido.grupo_id == grupo_id))
+    res_eq = await db.execute(select(Equipo).where(Equipo.grupo_id == grupo_id))
+    for eq in res_eq.scalars().all():
+        eq.grupo_id = None
+    await db.delete(grupo)
+    await db.flush()
 
 async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str) -> list[Partido]:
     res = await db.execute(select(Categoria).where(Categoria.id == categoria_id))

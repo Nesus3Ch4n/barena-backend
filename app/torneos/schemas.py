@@ -11,7 +11,7 @@ class CategoriaIn(BaseModel):
     puntos_x_set: int = Field(default=21)
     avance_x_grupo: int = Field(default=2, ge=1, le=4)
     clasificacion: str = Field(default="grupos", pattern="^(grupos|ranking_general)$")
-    criterio_clasif: str = Field(default="PTS>SF>CP>JL", max_length=200)
+    criterio_clasif: str = Field(default="PG>CS>CP>JL", max_length=200)
     ranking_general_enabled: bool = True
     bracket_tipo: str = Field(default="general", pattern="^(general|diamante|oro|diamante_oro)$")
     diferencia_dos_puntos: bool = True

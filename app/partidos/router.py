@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
-from app.partidos.schemas import GenerarFixtureIn, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import crear_partido_manual, actualizar_partido, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo
+from app.partidos.schemas import GenerarFixtureIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -40,8 +40,20 @@ async def listar_grupos_categoria(categoria_id: str, request: Request, user=Depe
 @categoria_fixture_router.post("/generar-fixture", response_model=dict)
 async def generar(categoria_id: str, body: GenerarFixtureIn = None, request: Request = None, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
-    partidos = await generar_fixture(db, categoria_id, body.bracket_tipo if body else None)
+    partidos = await generar_fixture(db, categoria_id, body.bracket_tipo if body else None, body.crear_grupos if body else True, body.sincronizar_grupos if body else False)
     return {"success": True, "data": {"generados": len(partidos), "partidos": [{"id": p.id, "grupo_id": p.grupo_id, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
+
+@categoria_fixture_router.patch("/grupos/{grupo_id}", response_model=dict)
+async def actualizar_grupo_endpoint(categoria_id: str, grupo_id: str, body: GrupoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
+    grupo = await actualizar_grupo(db, grupo_id, body.model_dump(exclude_unset=True))
+    return {"success": True, "data": {"id": grupo.id, "nombre": grupo.nombre, "orden": grupo.orden}, "error": None}
+
+@categoria_fixture_router.delete("/grupos/{grupo_id}", response_model=dict)
+async def eliminar_grupo_endpoint(categoria_id: str, grupo_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
+    await eliminar_grupo(db, grupo_id)
+    return {"success": True, "data": {"deleted": True}, "error": None}
 
 @categoria_fixture_router.post("/avanzar-bracket", response_model=dict)
 async def avanzar_bracket(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

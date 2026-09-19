@@ -35,7 +35,12 @@ def _general_full(r):
     return {
         "equipo_id": r.equipo_id,
         "pj": r.pj, "pg": r.pg, "pe": r.pe, "pp": r.pp,
-        "pts": r.pts, "sanciones": r.sanciones, "posicion": r.posicion,
+        "pts": r.pts,
+        "sets_favor": getattr(r, "sets_favor", 0) or 0,
+        "sets_contra": getattr(r, "sets_contra", 0) or 0,
+        "puntos_favor": getattr(r, "puntos_favor", 0) or 0,
+        "puntos_contra": getattr(r, "puntos_contra", 0) or 0,
+        "sanciones": r.sanciones, "posicion": r.posicion,
     }
 
 

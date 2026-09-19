@@ -4,7 +4,12 @@ from datetime import datetime
 
 class GenerarFixtureIn(BaseModel):
     crear_grupos: bool = True
+    sincronizar_grupos: bool = False
     bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro|diamante_oro)$")
+
+class GrupoUpdate(BaseModel):
+    nombre: Optional[str] = Field(default=None, min_length=1, max_length=10)
+    orden: Optional[int] = Field(default=None, ge=1, le=32)
 
 class ProgramarIn(BaseModel):
     cancha: Optional[str] = Field(None, max_length=50)
