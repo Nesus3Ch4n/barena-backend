@@ -99,12 +99,12 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
             if len(grupos) != num_grupos:
                 await db.execute(delete(Grupo).where(Grupo.categoria_id == categoria_id))
                 await db.flush()
-            grupos = []
-            for i in range(num_grupos):
-                g = Grupo(categoria_id=categoria_id, nombre=chr(65+i), orden=i+1)
-                db.add(g)
-                grupos.append(g)
-            await db.flush()
+                grupos = []
+                for i in range(num_grupos):
+                    g = Grupo(categoria_id=categoria_id, nombre=chr(65+i), orden=i+1)
+                    db.add(g)
+                    grupos.append(g)
+                await db.flush()
 
         # Shuffle per category for randomness
         random.seed(str(categoria_id).encode())
