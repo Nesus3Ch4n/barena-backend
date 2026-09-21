@@ -186,18 +186,26 @@ async def eliminar_grupo(db: AsyncSession, grupo_id: str) -> None:
     await db.flush()
 
 async def borrar_partidos_fase_grupos(db: AsyncSession, categoria_id: str) -> int:
-    """Elimina todos los partidos de la fase de grupos de una categoría."""
+    """Elimina partidos pendientes de la fase de grupos. Bloqueado si hay jugados/finalizados."""
     res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase == "grupos"))
-    ids = [p.id for p in res.scalars().all()]
+    todos = list(res.scalars().all())
+    jugados = sum(1 for p in todos if p.estado != "pendiente")
+    if jugados:
+        raise AppError(409, "FASE_CON_RESULTADOS", f"No se puede borrar: hay {jugados} partido(s) jugados. Elimine partidos individuales si es necesario", {"jugados": jugados})
+    ids = [p.id for p in todos]
     if ids:
         await db.execute(delete(Partido).where(Partido.id.in_(ids)))
         await db.flush()
     return len(ids)
 
 async def borrar_partidos_bracket(db: AsyncSession, categoria_id: str) -> int:
-    """Elimina todos los partidos del bracket eliminatorio de una categoría (fase != 'grupos')."""
+    """Elimina partidos pendientes del bracket. Bloqueado si hay jugados/finalizados."""
     res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase != "grupos"))
-    ids = [p.id for p in res.scalars().all()]
+    todos = list(res.scalars().all())
+    jugados = sum(1 for p in todos if p.estado != "pendiente")
+    if jugados:
+        raise AppError(409, "BRACKET_CON_RESULTADOS", f"No se puede borrar: hay {jugados} partido(s) jugados. Elimine partidos individuales si es necesario", {"jugados": jugados})
+    ids = [p.id for p in todos]
     if ids:
         await db.execute(delete(Partido).where(Partido.id.in_(ids)))
         await db.flush()
