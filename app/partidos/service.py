@@ -435,6 +435,10 @@ async def _avanzar_ganador(db: AsyncSession, partido: Partido):
     if partido.fase == "semi":
         if llave not in (0, 1):
             return
+        res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+        cat_t = res_cat.scalar_one_or_none()
+        if not getattr(cat_t, "cuadro_perdedores", False):
+            return
         res = await db.execute(
             select(Partido).where(
                 Partido.categoria_id == partido.categoria_id,
