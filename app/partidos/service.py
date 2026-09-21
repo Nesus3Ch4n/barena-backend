@@ -1112,6 +1112,21 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
     if tipo == "individual" and atleta_id:
         await resync_atleta_partido(db, partido_id, atleta_id)
 
+    if tipo == "tarjeta_amarilla" and razon == "demora":
+        # 2da demora del set: escalada automática a roja + punto y saque al rival
+        evs2 = await _live_eventos(db, partido_id)
+        ult2 = 0
+        for e in evs2:
+            if not e.revocado and e.tipo == "set_ganado":
+                ult2 = e.seq
+        demoras = [e for e in evs2 if not e.revocado and e.tipo == "tarjeta_amarilla" and e.lado == lado and (e.razon or "") == "demora" and e.seq > ult2]
+        if len(demoras) >= 2:
+            rival = "visitante" if lado == "local" else "local"
+            base = evs2[-1].seq
+            db.add(PartidoEvento(partido_id=partido_id, seq=base + 1, tipo="tarjeta_roja", lado=lado, razon="demora", extra={"auto": "demora", "origen_evento": evento.id}))
+            db.add(PartidoEvento(partido_id=partido_id, seq=base + 2, tipo="punto", lado=rival, extra={"auto": "demora"}))
+            await db.flush()
+
     if tipo == "set_ganado":
         snap = await live_snapshot(db, partido_id)
         ganador_lado = "local" if snap["score"]["local"] > snap["score"]["visitante"] else "visitante"
