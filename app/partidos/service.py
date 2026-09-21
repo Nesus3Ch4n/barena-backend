@@ -742,6 +742,7 @@ async def eliminar_partido(db: AsyncSession, partido_id: str, is_organizador: bo
 # ============================================================
 INDIVIDUAL_TIPOS = {"saque_directo", "defensa", "ataque", "bloqueo", "error_saque", "error_ataque"}
 TIEMPOS_LIMITE = {"tiempo_muerto": 2, "tiempo_receso": 2, "tiempo_medico": None}
+TIEMPOS_DURACION_SEG = {"tiempo_muerto": 30, "tiempo_receso": 180, "tiempo_medico": 300}
 SANCION_TIPOS = {"advertencia", "penalizacion", "descalificacion"}
 # accion individual -> (columna principal, columna de intentos o None)
 STAT_COLS = {
@@ -752,6 +753,15 @@ STAT_COLS = {
     "error_saque": ("errores_propios", "saques_total"),
     "error_ataque": ("errores_propios", "ataques_total"),
 }
+
+async def descalificados_set_actual(db: AsyncSession, partido_id: str) -> set:
+    """Atletas descalificados vigentes en el set actual (evento activo posterior al último set)."""
+    evs = await _live_eventos(db, partido_id)
+    ult = 0
+    for e in evs:
+        if not e.revocado and e.tipo == "set_ganado":
+            ult = e.seq
+    return {e.atleta_id for e in evs if not e.revocado and e.tipo == "descalificacion" and e.seq > ult and e.atleta_id}
 
 async def resync_atleta_partido(db: AsyncSession, partido_id: str, atleta_id: str) -> None:
     """Recalcula EstadisticaAtleta desde eventos individuales activos (idempotente: undo incluido)."""
@@ -959,6 +969,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         "saque": saque,
         "orden": orden,
         "tiempos": tiempos,
+        "tiempos_duracion_seg": TIEMPOS_DURACION_SEG,
         "tarjetas": tarjetas,
         "sanciones_detalle": sanciones_detalle,
         "sorteo": {"ganador_id": getattr(partido, "sorteo_ganador_id", None)},
@@ -1020,14 +1031,32 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
     elif tipo in ("tarjeta_amarilla", "tarjeta_roja"):
         if lado not in ("local", "visitante"):
             raise AppError(400, "LADO_REQUERIDO", "Tarjeta requiere lado local/visitante")
-        if razon and razon not in ("demora", "conducta"):
-            raise AppError(400, "RAZON_INVALIDA", "razon debe ser 'demora' o 'conducta'")
+        if razon and razon not in ("demora", "conducta", "antideportiva"):
+            raise AppError(400, "RAZON_INVALIDA", "razon debe ser 'demora', 'conducta' o 'antideportiva'")
+    elif tipo == "descalificacion":
+        if partido.estado != "en_juego":
+            raise AppError(400, "PARTIDO_NO_EN_JUEGO", "Solo se puede descalificar con el partido en juego")
+        if lado not in ("local", "visitante"):
+            raise AppError(400, "LADO_REQUERIDO", "Descalificación requiere lado local/visitante")
+        if not atleta_id:
+            raise AppError(400, "ATLETA_REQUERIDO", "Descalificación requiere atleta_id")
+        res_atl = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
+        atl = res_atl.scalar_one_or_none()
+        if not atl:
+            raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
+        eq_lado = partido.equipo_local_id if lado == "local" else partido.equipo_visit_id
+        if atl.equipo_id != eq_lado:
+            raise AppError(400, "ATLETA_NO_EN_LADO", "El atleta no pertenece a ese lado")
+        if atl.id in await descalificados_set_actual(db, partido_id):
+            raise AppError(409, "YA_DESCALIFICADO", "El atleta ya está descalificado en este set")
     elif tipo == "saque":
         if not atleta_id:
             raise AppError(400, "ATLETA_REQUERIDO", "Saque requiere atleta_id")
         res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
         if not res.scalar_one_or_none():
             raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
+        if atleta_id in await descalificados_set_actual(db, partido_id):
+            raise AppError(409, "ATLETA_DESCALIFICADO", "Atleta descalificado en este set")
     elif tipo == "orden_saque":
         if lado not in ("local", "visitante"):
             raise AppError(400, "LADO_REQUERIDO", "orden_saque requiere lado")
@@ -1050,6 +1079,8 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
             raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
         if atl.equipo_id not in (partido.equipo_local_id, partido.equipo_visit_id):
             raise AppError(400, "ATLETA_NO_EN_PARTIDO", "Atleta no pertenece a este partido")
+        if atl.id in await descalificados_set_actual(db, partido_id):
+            raise AppError(409, "ATLETA_DESCALIFICADO", "Atleta descalificado en este set")
         partido.saque_equipo_id = atl.equipo_id
         partido.saque_atleta_id = atl.id
     elif tipo == "sancion":
@@ -1070,6 +1101,8 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
             raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
         if atl.equipo_id not in (partido.equipo_local_id, partido.equipo_visit_id):
             raise AppError(400, "ATLETA_NO_EN_PARTIDO", "Atleta no pertenece a este partido")
+        if atl.id in await descalificados_set_actual(db, partido_id):
+            raise AppError(409, "ATLETA_DESCALIFICADO", "Atleta descalificado en este set: sus acciones no cuentan")
     else:
         raise AppError(400, "TIPO_INVALIDO", f"Tipo de evento no soportado: {tipo}")
 
@@ -1081,46 +1114,66 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
 
     if tipo == "set_ganado":
         snap = await live_snapshot(db, partido_id)
-        set_num = snap["current_set"]
-        ganador = partido.equipo_local_id if snap["score"]["local"] > snap["score"]["visitante"] else partido.equipo_visit_id
-        sp = SetPartido(partido_id=partido_id, numero_set=set_num, pts_local=snap["score"]["local"], pts_visitante=snap["score"]["visitante"], ganador_id=ganador)
-        db.add(sp)
+        ganador_lado = "local" if snap["score"]["local"] > snap["score"]["visitante"] else "visitante"
+        await _cerrar_set(db, partido, ganador_lado)
+    elif tipo == "descalificacion":
+        # amarilla+roja: el set termina aquí, puntos restantes al rival
+        rival = "visitante" if lado == "local" else "local"
+        evs = await _live_eventos(db, partido_id)
+        seq2 = evs[-1].seq + 1
+        db.add(PartidoEvento(partido_id=partido_id, seq=seq2, tipo="set_ganado", lado=rival,
+                             extra={"origen": "descalificacion", "origen_evento": evento.id, "descalificado_atleta_id": atleta_id}))
         await db.flush()
-        res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
-        cat = res_cat.scalar_one_or_none()
-        wins_l = snap["sets_ganados"]["local"] + (1 if ganador == partido.equipo_local_id else 0)
-        wins_v = snap["sets_ganados"]["visitante"] + (1 if ganador == partido.equipo_visit_id else 0)
-        if cat.sets_x_partido == 2:
-            if set_num >= 2:
-                pts_l = sum(s["pts_local"] for s in snap["sets"]) + snap["score"]["local"]
-                pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + snap["score"]["visitante"]
-                if wins_l == 2 or wins_v == 2:
-                    partido.ganador_id = partido.equipo_local_id if wins_l == 2 else partido.equipo_visit_id
-                elif wins_l == wins_v:
-                    partido.ganador_id = partido.equipo_local_id if pts_l > pts_v else (partido.equipo_visit_id if pts_v > pts_l else None)
-                partido.estado = "finalizado"
-        elif cat.sets_x_partido == 1:
-            partido.ganador_id = ganador
-            partido.estado = "finalizado"
-        else:
-            sets_needed = (cat.sets_x_partido // 2) + 1
-            if wins_l >= sets_needed:
-                partido.ganador_id = partido.equipo_local_id
-                partido.estado = "finalizado"
-            elif wins_v >= sets_needed:
-                partido.ganador_id = partido.equipo_visit_id
-                partido.estado = "finalizado"
-        await db.flush()
-        if partido.estado == "finalizado":
-            totales_snap = await live_snapshot(db, partido_id)
-            partido.tarjetas_amarillas_local = totales_snap["tarjetas"]["local"]["amarillas"]
-            partido.tarjetas_rojas_local = totales_snap["tarjetas"]["local"]["rojas"]
-            partido.tarjetas_amarillas_visit = totales_snap["tarjetas"]["visitante"]["amarillas"]
-            partido.tarjetas_rojas_visit = totales_snap["tarjetas"]["visitante"]["rojas"]
-            await db.flush()
-            await _avanzar_ganador(db, partido)
+        await _cerrar_set(db, partido, rival)
 
     return await live_snapshot(db, partido_id)
+
+async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str) -> None:
+    """Registra el SetPartido, avanza ganador/finaliza y cambia de lado automáticamente."""
+    partido_id = partido.id
+    snap = await live_snapshot(db, partido_id)
+    set_num = snap["current_set"]
+    ganador = partido.equipo_local_id if ganador_lado == "local" else partido.equipo_visit_id
+    sp = SetPartido(partido_id=partido_id, numero_set=set_num, pts_local=snap["score"]["local"], pts_visitante=snap["score"]["visitante"], ganador_id=ganador)
+    db.add(sp)
+    await db.flush()
+    res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+    cat = res_cat.scalar_one_or_none()
+    wins_l = snap["sets_ganados"]["local"] + (1 if ganador == partido.equipo_local_id else 0)
+    wins_v = snap["sets_ganados"]["visitante"] + (1 if ganador == partido.equipo_visit_id else 0)
+    if cat.sets_x_partido == 2:
+        if set_num >= 2:
+            pts_l = sum(s["pts_local"] for s in snap["sets"]) + snap["score"]["local"]
+            pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + snap["score"]["visitante"]
+            if wins_l == 2 or wins_v == 2:
+                partido.ganador_id = partido.equipo_local_id if wins_l == 2 else partido.equipo_visit_id
+            elif wins_l == wins_v:
+                partido.ganador_id = partido.equipo_local_id if pts_l > pts_v else (partido.equipo_visit_id if pts_v > pts_l else None)
+            partido.estado = "finalizado"
+    elif cat.sets_x_partido == 1:
+        partido.ganador_id = ganador
+        partido.estado = "finalizado"
+    else:
+        sets_needed = (cat.sets_x_partido // 2) + 1
+        if wins_l >= sets_needed:
+            partido.ganador_id = partido.equipo_local_id
+            partido.estado = "finalizado"
+        elif wins_v >= sets_needed:
+            partido.ganador_id = partido.equipo_visit_id
+            partido.estado = "finalizado"
+    await db.flush()
+    if partido.estado == "finalizado":
+        totales_snap = await live_snapshot(db, partido_id)
+        partido.tarjetas_amarillas_local = totales_snap["tarjetas"]["local"]["amarillas"]
+        partido.tarjetas_rojas_local = totales_snap["tarjetas"]["local"]["rojas"]
+        partido.tarjetas_amarillas_visit = totales_snap["tarjetas"]["visitante"]["amarillas"]
+        partido.tarjetas_rojas_visit = totales_snap["tarjetas"]["visitante"]["rojas"]
+        await db.flush()
+        await _avanzar_ganador(db, partido)
+    # cambio de lado automático al terminar el set
+    evs = await _live_eventos(db, partido_id)
+    db.add(PartidoEvento(partido_id=partido_id, seq=(evs[-1].seq + 1 if evs else 1), tipo="cambio_lado", extra={"auto": True}))
+    await db.flush()
 
 async def live_undo(db: AsyncSession, partido_id: str) -> dict:
     """Revoca la última acción del juez (deshacer)."""
@@ -1134,6 +1187,21 @@ async def live_undo(db: AsyncSession, partido_id: str) -> dict:
     ultimo.revocado = True
     if ultimo.tipo == "individual" and ultimo.atleta_id:
         await resync_atleta_partido(db, partido_id, ultimo.atleta_id)
+    if ultimo.tipo == "descalificacion":
+        # revocar en cascada el set cerrado por esta descalificación
+        res_link = await db.execute(select(PartidoEvento).where(PartidoEvento.partido_id == partido_id, PartidoEvento.tipo == "set_ganado", PartidoEvento.revocado == False).order_by(desc(PartidoEvento.seq)))
+        for cand in res_link.scalars().all():
+            if (cand.extra or {}).get("origen_evento") == ultimo.id:
+                cand.revocado = True
+                res_sp = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(desc(SetPartido.numero_set)).limit(1))
+                sp = res_sp.scalars().first()
+                if sp:
+                    await db.delete(sp)
+                if partido.estado == "finalizado":
+                    partido.estado = "en_juego"
+                    partido.ganador_id = None
+                break
+        await db.flush()
     if ultimo.tipo == "set_ganado":
         res2 = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(desc(SetPartido.numero_set)).limit(1))
         sp = res2.scalars().first()

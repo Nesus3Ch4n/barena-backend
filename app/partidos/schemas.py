@@ -54,10 +54,10 @@ class LiveEventoIn(BaseModel):
                 'advertencia'|'penalizacion'|'descalificacion' (sancion)
     extra.orden: lista de atleta_ids (orden_saque)
     extra.equipo_id: equipo ganador (sorteo)"""
-    tipo: str = Field(pattern="^(inicio|punto|set_ganado|tiempo_muerto|tiempo_receso|tiempo_medico|tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual|sorteo|saque_inicial|sancion)$")
+    tipo: str = Field(pattern="^(inicio|punto|set_ganado|tiempo_muerto|tiempo_receso|tiempo_medico|tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual|sorteo|saque_inicial|sancion|descalificacion)$")
     lado: Optional[str] = Field(default=None, pattern="^(local|visitante)$")
     atleta_id: Optional[str] = None
-    razon: Optional[str] = Field(default=None, pattern="^(demora|conducta)$")
+    razon: Optional[str] = Field(default=None, pattern="^(demora|conducta|antideportiva)$")
     numero: Optional[int] = Field(default=None, ge=1, le=99)
     extra: Optional[dict] = None
 
