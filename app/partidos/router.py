@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
-from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria
+from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -139,6 +139,14 @@ async def live_post(partido_id: str, body: LiveEventoIn, user=Depends(require_ro
 @router.post("/{partido_id}/live/undo", response_model=dict)
 async def live_undo_endpoint(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     return {"success": True, "data": await live_undo(db, partido_id), "error": None}
+
+@router.post("/{partido_id}/iniciar", response_model=dict)
+async def iniciar(partido_id: str, body: IniciarIn, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await iniciar_partido(db, partido_id, body.sorteo_ganador_id, body.saque_equipo_id, body.saque_atleta_id, user.id), "error": None}
+
+@router.post("/{partido_id}/finalizar", response_model=dict)
+async def finalizar(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await finalizar_partido(db, partido_id), "error": None}
 
 @router.patch("/{partido_id}", response_model=dict)
 async def actualizar(partido_id: str, body: PartidoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

@@ -11,6 +11,11 @@ class AvanzarIn(BaseModel):
     confirmar: bool = False
     emparejamiento: Optional[str] = Field(default=None, pattern="^(directo|ladder)$")
 
+class IniciarIn(BaseModel):
+    sorteo_ganador_id: str = Field(min_length=36)
+    saque_equipo_id: str = Field(min_length=36)
+    saque_atleta_id: str = Field(min_length=1)
+
 class GrupoUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=1, max_length=10)
     orden: Optional[int] = Field(default=None, ge=1, le=32)
@@ -40,13 +45,16 @@ class ResultadoIn(BaseModel):
 class LiveEventoIn(BaseModel):
     """Acción del juez en el marcador en vivo.
     tipo: inicio|punto|set_ganado|tiempo_muerto|tiempo_receso|tiempo_medico|
-          tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual
+          tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual|
+          sorteo|saque_inicial|sancion
     lado: 'local' | 'visitante' (opcional, no aplica a inicio/cambio_lado)
-    atleta_id: para saque, orden_saque (en extra.orden) e individual
+    atleta_id: para saque, orden_saque (en extra.orden), individual y saque_inicial
     razon: 'demora' | 'conducta' (tarjetas)
-    extra.tipo: 'saque_directo'|'defensa'|'ataque'|'bloqueo' (individual)
-    extra.orden: lista de atleta_ids (orden_saque)"""
-    tipo: str = Field(pattern="^(inicio|punto|set_ganado|tiempo_muerto|tiempo_receso|tiempo_medico|tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual)$")
+    extra.tipo: 'saque_directo'|'defensa'|'ataque'|'bloqueo'|'error_saque'|'error_ataque' (individual),
+                'advertencia'|'penalizacion'|'descalificacion' (sancion)
+    extra.orden: lista de atleta_ids (orden_saque)
+    extra.equipo_id: equipo ganador (sorteo)"""
+    tipo: str = Field(pattern="^(inicio|punto|set_ganado|tiempo_muerto|tiempo_receso|tiempo_medico|tarjeta_amarilla|tarjeta_roja|saque|orden_saque|cambio_lado|individual|sorteo|saque_inicial|sancion)$")
     lado: Optional[str] = Field(default=None, pattern="^(local|visitante)$")
     atleta_id: Optional[str] = None
     razon: Optional[str] = Field(default=None, pattern="^(demora|conducta)$")
