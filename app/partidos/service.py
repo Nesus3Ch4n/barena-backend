@@ -387,9 +387,11 @@ async def _guardar_snapshot(db: AsyncSession, categoria_id: str, cat, clasificad
     try:
         from sqlalchemy import text as _text
         import json as _json
-        filas = [{"posicion": i + 1, "equipo_id": getattr(e, "id", None), "nombre": getattr(e, "nombre", "")} for i, e in enumerate(clasificados)]
-        bracket = [{"id": getattr(p, "id", None), "fase": getattr(p, "fase", None), "llave": getattr(p, "llave", None),
-                    "local": getattr(p, "equipo_local_id", None), "visit": getattr(p, "equipo_visit_id", None)} for p in partidos]
+        def _sid(v):
+            return str(v) if v is not None else None
+        filas = [{"posicion": i + 1, "equipo_id": _sid(getattr(e, "id", None)), "nombre": getattr(e, "nombre", "")} for i, e in enumerate(clasificados)]
+        bracket = [{"id": _sid(getattr(p, "id", None)), "fase": getattr(p, "fase", None), "llave": getattr(p, "llave", None),
+                    "local": _sid(getattr(p, "equipo_local_id", None)), "visit": _sid(getattr(p, "equipo_visit_id", None))} for p in partidos]
         await db.execute(_text("INSERT INTO clasificacion_congelada (categoria_id, criterio, clasificados, emparejamiento, filas, bracket) VALUES (:cid, :crit, :cupo, :emp, CAST(:filas AS JSONB), CAST(:bracket AS JSONB))"),
                          {"cid": categoria_id, "crit": getattr(cat, "criterio_clasif", None) or "PG>CS>CP>JL",
                           "cupo": getattr(cat, "clasificados", None), "emp": emparejamiento,
