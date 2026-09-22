@@ -775,6 +775,16 @@ STAT_COLS = {
     "error_ataque": ("errores_propios", "ataques_total"),
 }
 
+async def _validar_atleta_lado(db: AsyncSession, partido: Partido, lado: str, atleta_id: str) -> None:
+    """Atleta opcional en tarjetas/sanciones: si viene, debe pertenecer al equipo de ese lado."""
+    eq_id = partido.equipo_local_id if lado == "local" else partido.equipo_visit_id
+    res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
+    atl = res.scalar_one_or_none()
+    if not atl:
+        raise AppError(400, "ATLETA_INVALIDO", "Atleta no existe")
+    if atl.equipo_id != eq_id:
+        raise AppError(400, "ATLETA_NO_EN_LADO", "El atleta no pertenece a ese lado")
+
 async def descalificados_set_actual(db: AsyncSession, partido_id: str) -> set:
     """Atletas descalificados vigentes en el set actual (evento activo posterior al último set)."""
     evs = await _live_eventos(db, partido_id)
@@ -1013,6 +1023,23 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
             continue
         acc = (e.extra or {}).get("tipo", "advertencia")
         sanciones_detalle[e.lado][acc] = sanciones_detalle[e.lado].get(acc, 0) + 1
+    # Sanciones por atleta (tarjetas + sanciones con atleta_id)
+    sanciones_jugador: dict = {}
+    for e in activos:
+        if e.tipo not in ("tarjeta_amarilla", "tarjeta_roja", "sancion", "descalificacion") or not e.atleta_id:
+            continue
+        lab = e.tipo
+        if e.tipo == "sancion":
+            lab = str((e.extra or {}).get("tipo", "sancion"))
+        ind = sanciones_jugador.setdefault(e.atleta_id, {"amarillas": 0, "rojas": 0, "otras": 0, "descalificado": False})
+        if e.tipo == "tarjeta_amarilla":
+            ind["amarillas"] += 1
+        elif e.tipo == "tarjeta_roja":
+            ind["rojas"] += 1
+        elif e.tipo == "descalificacion":
+            ind["descalificado"] = True
+        else:
+            ind["otras"] += 1
 
     # Lados invertidos (cambio de lado impar)
     n_cambios = sum(1 for e in activos if e.tipo == "cambio_lado")
@@ -1065,6 +1092,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         "tiempos_duracion_seg": TIEMPOS_DURACION_SEG,
         "tarjetas": tarjetas,
         "sanciones_detalle": sanciones_detalle,
+        "sanciones_jugador": sanciones_jugador,
         "sorteo": {"ganador_id": getattr(partido, "sorteo_ganador_id", None)},
         "saque_info": {"equipo_id": getattr(partido, "saque_equipo_id", None), "atleta_id": getattr(partido, "saque_atleta_id", None)},
         "iniciado_en": partido.iniciado_en.isoformat() if getattr(partido, "iniciado_en", None) else None,
@@ -1126,6 +1154,8 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
             raise AppError(400, "LADO_REQUERIDO", "Tarjeta requiere lado local/visitante")
         if razon and razon not in ("demora", "conducta", "antideportiva"):
             raise AppError(400, "RAZON_INVALIDA", "razon debe ser 'demora', 'conducta' o 'antideportiva'")
+        if atleta_id:
+            await _validar_atleta_lado(db, partido, lado, atleta_id)
     elif tipo == "descalificacion":
         if partido.estado != "en_juego":
             raise AppError(400, "PARTIDO_NO_EN_JUEGO", "Solo se puede descalificar con el partido en juego")
@@ -1182,6 +1212,8 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
             raise AppError(400, "SANCION_INVALIDA", f"extra.tipo debe ser uno de {sorted(SANCION_TIPOS)}")
         if lado not in ("local", "visitante"):
             raise AppError(400, "LADO_REQUERIDO", "Sanción requiere lado local/visitante")
+        if atleta_id:
+            await _validar_atleta_lado(db, partido, lado, atleta_id)
     elif tipo == "individual":
         if not atleta_id:
             raise AppError(400, "ATLETA_REQUERIDO", "acción individual requiere atleta_id")
