@@ -875,7 +875,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
 
     # Rotación de saque (sideout real): si saca y gana repite sacador; si recibe
     # y gana (sideout), saca el siguiente de su orden. Un evento saque manual
-    # reancla el puntero. idx[lado] = índice en orden[lado] del sacador actual.
+    # reancla el puntero. idx[lado] = índice en orden[lado] del PRÓXIMO sacador.
     desc_vig = {e.atleta_id for e in activos if e.tipo == "descalificacion" and e.seq > ultimo_set_iter and e.atleta_id}
 
     def _idx_en(od, aid):
@@ -884,37 +884,58 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         except ValueError:
             return 0
 
+    def _saltar_desc(od, i):
+        for _ in range(len(od)):
+            if od[i % len(od)] not in desc_vig:
+                return i % len(od)
+            i += 1
+        return None
+
     idx = {"local": 0, "visitante": 0}
+    srv = {"local": None, "visitante": None}
     sirviendo = None
     for e in activos:
         if e.tipo in ("saque", "saque_inicial") and e.atleta_id:
             ld = _lado_de(e.atleta_id) or (e.lado if e.lado in orden else None)
-            if ld and orden.get(ld):
+            od = orden.get(ld) or [] if ld else []
+            if ld and od and e.atleta_id not in desc_vig:
                 sirviendo = ld
-                idx[ld] = _idx_en(orden[ld], e.atleta_id)
+                srv[ld] = e.atleta_id
+                j = _saltar_desc(od, _idx_en(od, e.atleta_id) + 1)
+                idx[ld] = j if j is not None else 0
         elif e.tipo == "punto" and e.lado in ("local", "visitante"):
             if sirviendo is None:
                 sirviendo = e.lado
+                od = orden.get(sirviendo) or []
+                if od:
+                    j = _saltar_desc(od, idx[sirviendo])
+                    if j is not None:
+                        srv[sirviendo] = od[j]
+                        idx[sirviendo] = (j + 1) % len(od)
             elif e.lado != sirviendo:
                 sirviendo = e.lado
-                if orden.get(sirviendo):
-                    idx[sirviendo] = (idx[sirviendo] + 1) % len(orden[sirviendo])
+                od = orden.get(sirviendo) or []
+                if od:
+                    j = _saltar_desc(od, idx[sirviendo])
+                    if j is not None:
+                        srv[sirviendo] = od[j]
+                        idx[sirviendo] = (j + 1) % len(od)
 
-    def _servidor(ld):
+    def _siguiente(ld):
         od = orden.get(ld) or []
         if not od:
             return None
-        cand = od[idx[ld] % len(od)]
-        if cand not in desc_vig:
-            return cand
-        return next((a for a in od if a not in desc_vig), None)
+        j = _saltar_desc(od, idx[ld])
+        return od[j] if j is not None else None
 
-    saque = {"lado": sirviendo, "atleta_id": _servidor(sirviendo) if sirviendo else None}
+    saque = {"lado": sirviendo, "atleta_id": srv.get(sirviendo) if sirviendo else None}
+    if sirviendo and saque["atleta_id"] in desc_vig:
+        saque["atleta_id"] = _siguiente(sirviendo)
     rotacion = {}
     for ld in ("local", "visitante"):
         od = orden.get(ld) or []
         rotacion[ld] = {"orden": od, "idx": idx[ld] % len(od) if od else 0,
-                        "siguiente_atleta_id": (od[idx[ld] % len(od)] if od else None)}
+                        "siguiente_atleta_id": _siguiente(ld)}
     # próximo saque: si el set está vacío, alterna respecto al primer saque del set anterior
     proximo = {"lado": sirviendo, "atleta_id": saque["atleta_id"]}
     hay_puntos = any(e.tipo == "punto" and e.seq > ultimo_set_iter for e in activos)
