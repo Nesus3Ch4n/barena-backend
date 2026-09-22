@@ -15,6 +15,8 @@ class IniciarIn(BaseModel):
     sorteo_ganador_id: str = Field(min_length=36)
     saque_equipo_id: str = Field(min_length=36)
     saque_atleta_id: str = Field(min_length=1)
+    orden_local: Optional[List[str]] = None
+    orden_visitante: Optional[List[str]] = None
 
 class GrupoUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=1, max_length=10)

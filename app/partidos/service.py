@@ -865,30 +865,79 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         return "local" if eq == partido.equipo_local_id else ("visitante" if eq == partido.equipo_visit_id else "")
 
     # Orden de saque por dupla (último orden_saque activo por lado, si existe)
+    vistos = set()
     for e in reversed(activos):
-        if e.tipo == "orden_saque" and e.lado in orden:
+        if e.tipo == "orden_saque" and e.lado in orden and e.lado not in vistos:
             lista = (e.extra or {}).get("orden") or []
             if len(lista) == 2:
                 orden[e.lado] = lista
-                break
+                vistos.add(e.lado)
 
-    # Saque actual: explícito (evento saque) o implícito (ganador del último punto)
-    saque = {"lado": None, "atleta_id": None}
-    ultimo_saque = None
-    for e in reversed(activos):
-        if e.tipo == "saque":
-            ultimo_saque = e
-            break
-    if ultimo_punto:
-        saque["lado"] = ultimo_punto.lado
-        saque["atleta_id"] = orden[ultimo_punto.lado][0] if orden.get(ultimo_punto.lado) else None
-    if ultimo_saque and (not ultimo_punto or _lado_de(ultimo_saque.atleta_id) == ultimo_punto.lado):
-        saque["lado"] = _lado_de(ultimo_saque.atleta_id) or (ultimo_saque.lado or saque["lado"])
-        saque["atleta_id"] = ultimo_saque.atleta_id
-    if ultimo_saque and not ultimo_punto and not saque["atleta_id"]:
-        lado_sc = _lado_de(ultimo_saque.atleta_id) or (ultimo_saque.lado or None)
-        saque["lado"] = lado_sc
-        saque["atleta_id"] = ultimo_saque.atleta_id if lado_sc else None
+    # Rotación de saque (sideout real): si saca y gana repite sacador; si recibe
+    # y gana (sideout), saca el siguiente de su orden. Un evento saque manual
+    # reancla el puntero. idx[lado] = índice en orden[lado] del sacador actual.
+    desc_vig = {e.atleta_id for e in activos if e.tipo == "descalificacion" and e.seq > ultimo_set_iter and e.atleta_id}
+
+    def _idx_en(od, aid):
+        try:
+            return od.index(aid)
+        except ValueError:
+            return 0
+
+    idx = {"local": 0, "visitante": 0}
+    sirviendo = None
+    for e in activos:
+        if e.tipo in ("saque", "saque_inicial") and e.atleta_id:
+            ld = _lado_de(e.atleta_id) or (e.lado if e.lado in orden else None)
+            if ld and orden.get(ld):
+                sirviendo = ld
+                idx[ld] = _idx_en(orden[ld], e.atleta_id)
+        elif e.tipo == "punto" and e.lado in ("local", "visitante"):
+            if sirviendo is None:
+                sirviendo = e.lado
+            elif e.lado != sirviendo:
+                sirviendo = e.lado
+                if orden.get(sirviendo):
+                    idx[sirviendo] = (idx[sirviendo] + 1) % len(orden[sirviendo])
+
+    def _servidor(ld):
+        od = orden.get(ld) or []
+        if not od:
+            return None
+        cand = od[idx[ld] % len(od)]
+        if cand not in desc_vig:
+            return cand
+        return next((a for a in od if a not in desc_vig), None)
+
+    saque = {"lado": sirviendo, "atleta_id": _servidor(sirviendo) if sirviendo else None}
+    rotacion = {}
+    for ld in ("local", "visitante"):
+        od = orden.get(ld) or []
+        rotacion[ld] = {"orden": od, "idx": idx[ld] % len(od) if od else 0,
+                        "siguiente_atleta_id": (od[idx[ld] % len(od)] if od else None)}
+    # próximo saque: si el set está vacío, alterna respecto al primer saque del set anterior
+    proximo = {"lado": sirviendo, "atleta_id": saque["atleta_id"]}
+    hay_puntos = any(e.tipo == "punto" and e.seq > ultimo_set_iter for e in activos)
+    if not hay_puntos:
+        ant = [e for e in activos if e.seq <= ultimo_set_iter]
+        ult_ant = 0
+        for e in ant:
+            if e.tipo == "set_ganado":
+                ult_ant = e.seq
+        primero_previo = None
+        for e in ant:
+            if e.seq <= ult_ant:
+                continue
+            if e.tipo in ("saque", "saque_inicial") and e.atleta_id:
+                primero_previo = _lado_de(e.atleta_id) or None
+                break
+            if e.tipo == "punto" and e.lado in ("local", "visitante") and primero_previo is None:
+                primero_previo = e.lado
+        lado_prox = ("visitante" if primero_previo == "local" else "local") if primero_previo else None
+        if lado_prox and orden.get(lado_prox):
+            proximo = {"lado": lado_prox, "atleta_id": _servidor(lado_prox)}
+            if sirviendo is None:
+                saque = dict(proximo)
 
     # Tiempos y tarjetas
     tiempos = {"local": {"tiempo_muerto": 0, "tiempo_receso": 0, "tiempo_medico": 0},
@@ -968,6 +1017,8 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         "sets_ganados": sets_ganados,
         "saque": saque,
         "orden": orden,
+        "rotacion": rotacion,
+        "proximo_saque": proximo,
         "tiempos": tiempos,
         "tiempos_duracion_seg": TIEMPOS_DURACION_SEG,
         "tarjetas": tarjetas,
@@ -1246,7 +1297,7 @@ async def live_undo(db: AsyncSession, partido_id: str) -> dict:
     await db.flush()
     return await live_snapshot(db, partido_id)
 
-async def iniciar_partido(db: AsyncSession, partido_id: str, sorteo_ganador_id: str, saque_equipo_id: str, saque_atleta_id: str, user_id: str) -> dict:
+async def iniciar_partido(db: AsyncSession, partido_id: str, sorteo_ganador_id: str, saque_equipo_id: str, saque_atleta_id: str, user_id: str, orden_local: list = None, orden_visitante: list = None) -> dict:
     """Sorteo + primer saque e inicio del partido (pendiente -> en_juego)."""
     from datetime import datetime, timezone
     partido = await _live_partido(db, partido_id)
@@ -1274,15 +1325,32 @@ async def iniciar_partido(db: AsyncSession, partido_id: str, sorteo_ganador_id: 
     partido.iniciado_en = datetime.now(timezone.utc)
     partido.iniciado_por = user_id
     await db.flush()
+    for lado, ord_list in (("local", orden_local), ("visitante", orden_visitante)):
+        if not ord_list:
+            continue
+        eq_id = partido.equipo_local_id if lado == "local" else partido.equipo_visit_id
+        if len(ord_list) != 2 or not all(ord_list):
+            raise AppError(400, "ORDEN_INVALIDO", f"Orden de {lado} debe tener 2 atleta_ids")
+        res_o = await db.execute(select(Atleta).where(Atleta.id.in_(ord_list)))
+        ats_o = {a.id: a for a in res_o.scalars().all()}
+        if len(ats_o) != 2 or any(a.equipo_id != eq_id for a in ats_o.values()):
+            raise AppError(400, "ORDEN_INVALIDO", f"Orden de {lado} debe ser con atletas de ese lado")
     eventos = await _live_eventos(db, partido_id)
-    seq = (eventos[-1].seq + 1) if eventos else 1
+    seq = [(eventos[-1].seq + 1) if eventos else 1]
     # flush 1x1: el batch multi-fila de eventos falla (sentinel UUID)
-    db.add(PartidoEvento(partido_id=partido_id, seq=seq, tipo="sorteo", extra={"equipo_id": sorteo_ganador_id}))
-    await db.flush()
-    db.add(PartidoEvento(partido_id=partido_id, seq=seq + 1, tipo="saque_inicial", atleta_id=saque_atleta_id, lado=("local" if saque_equipo_id == partido.equipo_local_id else "visitante")))
-    await db.flush()
-    db.add(PartidoEvento(partido_id=partido_id, seq=seq + 2, tipo="inicio"))
-    await db.flush()
+
+    async def _ev(**kw):
+        db.add(PartidoEvento(partido_id=partido_id, seq=seq[0], **kw))
+        await db.flush()
+        seq[0] += 1
+
+    await _ev(tipo="sorteo", extra={"equipo_id": sorteo_ganador_id})
+    await _ev(tipo="saque_inicial", atleta_id=saque_atleta_id, lado=("local" if saque_equipo_id == partido.equipo_local_id else "visitante"))
+    if orden_local:
+        await _ev(tipo="orden_saque", lado="local", extra={"orden": orden_local})
+    if orden_visitante:
+        await _ev(tipo="orden_saque", lado="visitante", extra={"orden": orden_visitante})
+    await _ev(tipo="inicio")
     return await live_snapshot(db, partido_id)
 
 async def finalizar_partido(db: AsyncSession, partido_id: str) -> dict:

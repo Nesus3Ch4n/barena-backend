@@ -143,7 +143,7 @@ async def live_undo_endpoint(partido_id: str, user=Depends(require_roles(*LIVE_R
 
 @router.post("/{partido_id}/iniciar", response_model=dict)
 async def iniciar(partido_id: str, body: IniciarIn, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
-    return {"success": True, "data": await iniciar_partido(db, partido_id, body.sorteo_ganador_id, body.saque_equipo_id, body.saque_atleta_id, user.id), "error": None}
+    return {"success": True, "data": await iniciar_partido(db, partido_id, body.sorteo_ganador_id, body.saque_equipo_id, body.saque_atleta_id, user.id, body.orden_local, body.orden_visitante), "error": None}
 
 @router.post("/{partido_id}/finalizar", response_model=dict)
 async def finalizar(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
