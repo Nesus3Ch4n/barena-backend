@@ -91,25 +91,6 @@ async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: 
         snap = None
     return {"success": True, "data": {"pendientes": pend, "con_resultado": hechas, "congelada": snap}, "error": None}
 
-@categoria_fixture_router.post("/_migracion013", response_model=dict)
-async def _migracion013_tmp(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
-    # TEMPORAL-ELIMINAR: aplica migracion 013 (DDL fijo, sin inputs)
-    from sqlalchemy import text as _text
-    await db.execute(_text("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS clasificados INTEGER"))
-    await db.execute(_text("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS criterio_emparejamiento TEXT DEFAULT 'directo'"))
-    await db.execute(_text("""CREATE TABLE IF NOT EXISTS clasificacion_congelada (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), categoria_id UUID NOT NULL REFERENCES categorias(id) ON DELETE CASCADE,
-        creada_en TIMESTAMPTZ NOT NULL DEFAULT now(), criterio TEXT NOT NULL DEFAULT 'PG>CS>CP>JL',
-        clasificados INT NULL, emparejamiento TEXT NOT NULL DEFAULT 'directo',
-        filas JSONB NOT NULL DEFAULT '[]'::jsonb, bracket JSONB NOT NULL DEFAULT '[]'::jsonb)"""))
-    await db.execute(_text("CREATE INDEX IF NOT EXISTS ix_clasif_congelada_cat ON clasificacion_congelada (categoria_id, creada_en DESC)"))
-    await db.execute(_text("UPDATE categorias SET clasificados = 8 WHERE id IN ('548dd40e-5655-4b5f-82b3-bc28b2a495bd','9da62157-11a8-4755-83a9-8d5a0395dacc')"))
-    await db.flush()
-    cols = list((await db.execute(_text("SELECT column_name FROM information_schema.columns WHERE table_name='categorias' AND column_name IN ('clasificados','criterio_emparejamiento') ORDER BY column_name"))).scalars().all())
-    tbl = (await db.execute(_text("SELECT to_regclass('public.clasificacion_congelada')"))).scalar()
-    cats = [dict(r) for r in (await db.execute(_text("SELECT nombre, clasificados, criterio_emparejamiento FROM categorias WHERE id IN ('548dd40e-5655-4b5f-82b3-bc28b2a495bd','9da62157-11a8-4755-83a9-8d5a0395dacc')"))).mappings().all()]
-    return {"success": True, "data": {"columnas": cols, "tabla": str(tbl), "categorias": cats}, "error": None}
-
 @categoria_fixture_router.post("/sincronizar", response_model=dict)
 async def sincronizar(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
