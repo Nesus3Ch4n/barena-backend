@@ -1124,7 +1124,7 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
             rival = "visitante" if lado == "local" else "local"
             base = evs2[-1].seq
             # flush 1x1: el batch multi-fila de eventos falla (sentinel UUID)
-            db.add(PartidoEvento(partido_id=partido_id, seq=base + 1, tipo="tarjeta_roja", lado=lado, razon="demora", extra={"auto": "demora", "origen_evento": evento.id}))
+            db.add(PartidoEvento(partido_id=partido_id, seq=base + 1, tipo="tarjeta_roja", lado=lado, razon="demora", extra={"auto": "demora", "origen_evento": str(evento.id)}))
             await db.flush()
             db.add(PartidoEvento(partido_id=partido_id, seq=base + 2, tipo="punto", lado=rival, extra={"auto": "demora"}))
             await db.flush()
@@ -1139,7 +1139,7 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
         evs = await _live_eventos(db, partido_id)
         seq2 = evs[-1].seq + 1
         db.add(PartidoEvento(partido_id=partido_id, seq=seq2, tipo="set_ganado", lado=rival,
-                             extra={"origen": "descalificacion", "origen_evento": evento.id, "descalificado_atleta_id": atleta_id}))
+                             extra={"origen": "descalificacion", "origen_evento": str(evento.id), "descalificado_atleta_id": atleta_id}))
         await db.flush()
         await _cerrar_set(db, partido, rival)
 
@@ -1208,7 +1208,7 @@ async def live_undo(db: AsyncSession, partido_id: str) -> dict:
         # revocar en cascada el set cerrado por esta descalificación
         res_link = await db.execute(select(PartidoEvento).where(PartidoEvento.partido_id == partido_id, PartidoEvento.tipo == "set_ganado", PartidoEvento.revocado == False).order_by(desc(PartidoEvento.seq)))
         for cand in res_link.scalars().all():
-            if (cand.extra or {}).get("origen_evento") == ultimo.id:
+            if (cand.extra or {}).get("origen_evento") == str(ultimo.id):
                 cand.revocado = True
                 res_sp = await db.execute(select(SetPartido).where(SetPartido.partido_id == partido_id).order_by(desc(SetPartido.numero_set)).limit(1))
                 sp = res_sp.scalars().first()
