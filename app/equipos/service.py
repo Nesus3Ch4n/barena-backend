@@ -213,7 +213,9 @@ async def validar_grupo_lleno(db: AsyncSession, categoria_id: str, grupo_id: str
         raise AppError(409, "GRUPO_LLENO", f"Grupo {g.nombre if g else ''} lleno ({ocupados}/{limite})", {"grupo_id": grupo_id, "ocupados": ocupados, "limite": limite})
 
 async def retirar_equipo(db: AsyncSession, equipo_id: str) -> dict:
-    """Baja de dupla: sin partidos → borrado físico; con partidos → estado retirada (conserva historial)."""
+    """Baja de dupla: sin partidos → borrado físico; con partidos → estado eliminado
+    (el CHECK de BD solo admite pendiente/aprobado/eliminado; eliminado ya está
+    excluido de fixture, rankings y listados, así que conserva el historial)."""
     res = await db.execute(select(Equipo).where(Equipo.id == equipo_id))
     equipo = res.scalar_one_or_none()
     if not equipo:
@@ -224,7 +226,7 @@ async def retirar_equipo(db: AsyncSession, equipo_id: str) -> dict:
         await db.delete(equipo)
         await db.flush()
         return {"eliminado_fisico": True, "partidos_jugados": 0, "partidos_total": 0, "nombre": equipo.nombre}
-    equipo.estado = "retirada"
+    equipo.estado = "eliminado"
     await db.flush()
     return {"eliminado_fisico": False, "partidos_jugados": conteo["jugados"], "partidos_total": conteo["total"], "nombre": equipo.nombre}
 
@@ -290,7 +292,7 @@ async def reemplazar_equipo(db: AsyncSession, equipo_id: str, data) -> dict:
         await _reemplazar_atletas_in_place(db, equipo_id, data.atletas)
         return {"modo": "conservar_historial", "equipo_id": equipo_id, "partidos_jugados": conteo["jugados"], "nombre": equipo.nombre}
     # nueva_participacion: retira la actual y crea una nueva en el mismo grupo/categoria
-    equipo.estado = "retirada"
+    equipo.estado = "eliminado"
     await db.flush()
     nuevo = Equipo(categoria_id=equipo.categoria_id, grupo_id=equipo.grupo_id, nombre=(data.nombre.strip() if data.nombre else equipo.nombre), ciudad=data.ciudad.strip() if data.ciudad else equipo.ciudad, estado="aprobado", seed=equipo.seed)
     db.add(nuevo)
