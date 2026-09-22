@@ -74,6 +74,23 @@ async def borrar_bracket(categoria_id: str, request: Request, user=Depends(requi
     borrados = await borrar_partidos_bracket(db, categoria_id)
     return {"success": True, "data": {"borrados": borrados}, "error": None}
 
+@categoria_fixture_router.get("/bracket-estado", response_model=dict)
+async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text as _text
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase != "grupos"))
+    elim = list(res.scalars().all())
+    pend = sum(1 for p in elim if p.estado == "pendiente")
+    hechas = sum(1 for p in elim if p.estado != "pendiente")
+    snap = None
+    try:
+        r2 = await db.execute(_text("SELECT creada_en, criterio, clasificados, emparejamiento, filas FROM clasificacion_congelada WHERE categoria_id = :cid ORDER BY creada_en DESC LIMIT 1"), {"cid": categoria_id})
+        row = r2.mappings().first()
+        if row:
+            snap = {"creada_en": row["creada_en"].isoformat() if row["creada_en"] else None, "criterio": row["criterio"], "clasificados": row["clasificados"], "emparejamiento": row["emparejamiento"], "filas": row["filas"]}
+    except Exception:
+        snap = None
+    return {"success": True, "data": {"pendientes": pend, "con_resultado": hechas, "congelada": snap}, "error": None}
+
 @categoria_fixture_router.post("/sincronizar", response_model=dict)
 async def sincronizar(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
@@ -112,7 +129,11 @@ async def resultado(partido_id: str, body: ResultadoIn, request: Request, user=D
         "tarjetas_rojas_visit": body.tarjetas_rojas_visit,
     }
     partido = await registrar_resultado(db, partido_id, sets, is_organizador=is_org, tarjetas=tarjetas)
-    return {"success": True, "data": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id}, "error": None}
+    bracket_generado = False
+    if partido.fase == "grupos":
+        res_e = await db.execute(select(Partido.id).where(Partido.categoria_id == partido.categoria_id, Partido.fase != "grupos").limit(1))
+        bracket_generado = res_e.scalar_one_or_none() is not None
+    return {"success": True, "data": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "bracket_generado": bracket_generado}, "error": None}
 
 @router.get("/{partido_id}", response_model=dict)
 async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):

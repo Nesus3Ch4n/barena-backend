@@ -363,7 +363,9 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
             slots[n - 1] = eqs[n - 1].id
         await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
 
-    emp = emparejamiento or "ladder"
+    emp = emparejamiento or getattr(cat, "criterio_emparejamiento", None) or "directo"
+    if emp not in ("directo", "ladder"):
+        emp = "directo"
     crear = _crear_directo_para if emp == "directo" else _crear_ladder_para
     if efectivo_bracket == "diamante_oro":
         mid = (len(clasificados) + 1) // 2
@@ -377,7 +379,24 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
         await crear(clasificados, "general")
 
     await db.flush()
+    await _guardar_snapshot(db, categoria_id, cat, clasificados, emp, partidos_creados)
     return partidos_creados, pendientes_previos
+
+async def _guardar_snapshot(db: AsyncSession, categoria_id: str, cat, clasificados: list, emparejamiento: str, partidos: list) -> None:
+    """Congela la clasificación usada al avanzar. Nunca falla el avanzar (tabla opcional)."""
+    try:
+        from sqlalchemy import text as _text
+        import json as _json
+        filas = [{"posicion": i + 1, "equipo_id": getattr(e, "id", None), "nombre": getattr(e, "nombre", "")} for i, e in enumerate(clasificados)]
+        bracket = [{"id": getattr(p, "id", None), "fase": getattr(p, "fase", None), "llave": getattr(p, "llave", None),
+                    "local": getattr(p, "equipo_local_id", None), "visit": getattr(p, "equipo_visit_id", None)} for p in partidos]
+        await db.execute(_text("INSERT INTO clasificacion_congelada (categoria_id, criterio, clasificados, emparejamiento, filas, bracket) VALUES (:cid, :crit, :cupo, :emp, CAST(:filas AS JSONB), CAST(:bracket AS JSONB))"),
+                         {"cid": categoria_id, "crit": getattr(cat, "criterio_clasif", None) or "PG>CS>CP>JL",
+                          "cupo": getattr(cat, "clasificados", None), "emp": emparejamiento,
+                          "filas": _json.dumps(filas), "bracket": _json.dumps(bracket)})
+        await db.flush()
+    except Exception:
+        pass
 
 async def _armar_ladder(db, categoria_id, slots, btype, partidos_creados):
     """Construye la escala completa: la llave j de una fase alimenta la llave j//2
