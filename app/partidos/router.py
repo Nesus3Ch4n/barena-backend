@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
+from app.partidos.models import Partido
 from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
 from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria
 
