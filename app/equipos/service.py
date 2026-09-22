@@ -1,6 +1,6 @@
 import uuid, random, string
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, insert, update, delete
+from sqlalchemy import select, insert, update, delete, text
 from app.equipos.models import Equipo
 from app.torneos.models import Categoria, Torneo, Rama
 from app.atletas.models import Atleta
@@ -124,6 +124,7 @@ async def update_equipo(db: AsyncSession, equipo_id: str, data, user_id: str, is
     if not rama:
         raise NotFound("RAMA_NOT_FOUND", "Rama no existe")
     await verify_torneo_owner(db, rama.torneo_id, user_id, is_super, is_org)
+    grupo_anterior = equipo.grupo_id
     upd = data.model_dump(exclude_unset=True)
     if "nombre" in upd and upd["nombre"] is not None:
         # check duplicate in same categoria if nombre changes
@@ -152,6 +153,8 @@ async def update_equipo(db: AsyncSession, equipo_id: str, data, user_id: str, is
                     raise AppError(409, "EQUIPO_CON_PARTIDOS", "Esta dupla ya tiene partidos registrados. Cambiar de grupo puede afectar la programación y las estadísticas", {"partidos_jugados": conteo["jugados"], "partidos_total": conteo["total"], "requiere_forzar": True})
             await validar_grupo_lleno(db, equipo.categoria_id, nuevo_grupo, excluir_equipo_id=equipo_id)
         equipo.grupo_id = nuevo_grupo
+        if grupo_anterior != nuevo_grupo:
+            await recalc_rankings_equipo(db, equipo.categoria_id, [grupo_anterior, nuevo_grupo])
     if "seed" in upd:
         equipo.seed = upd["seed"]
     if "foto_url" in upd:
@@ -165,6 +168,14 @@ async def update_equipo(db: AsyncSession, equipo_id: str, data, user_id: str, is
 
 def _norm_nombre(s: str) -> str:
     return (s or "").strip().lower()
+
+async def recalc_rankings_equipo(db: AsyncSession, categoria_id: str, grupo_ids=None) -> None:
+    """Recalcula rankings tras cambios administrativos (las triggers solo cubren partidos/sets)."""
+    grupos = [g for g in (grupo_ids or []) if g]
+    for gid in dict.fromkeys(grupos):
+        await db.execute(text("SELECT fn_recalc_rankings_grupo(:gid)"), {"gid": gid})
+    await db.execute(text("SELECT fn_recalc_rankings_general(:cid)"), {"cid": categoria_id})
+    await db.flush()
 
 async def contar_partidos_equipo(db: AsyncSession, equipo_id: str) -> dict:
     """Devuelve {total, jugados} para una dupla. Jugados = estado distinto de pendiente."""
@@ -221,13 +232,16 @@ async def retirar_equipo(db: AsyncSession, equipo_id: str) -> dict:
     if not equipo:
         raise NotFound("EQUIPO_NOT_FOUND", "Equipo no existe", {"id": equipo_id})
     conteo = await contar_partidos_equipo(db, equipo_id)
+    cat_id, grp_id = equipo.categoria_id, equipo.grupo_id
     if conteo["total"] == 0:
         await db.execute(delete(Atleta).where(Atleta.equipo_id == equipo_id))
         await db.delete(equipo)
         await db.flush()
+        await recalc_rankings_equipo(db, cat_id, [grp_id])
         return {"eliminado_fisico": True, "partidos_jugados": 0, "partidos_total": 0, "nombre": equipo.nombre}
     equipo.estado = "eliminado"
     await db.flush()
+    await recalc_rankings_equipo(db, cat_id, [grp_id])
     return {"eliminado_fisico": False, "partidos_jugados": conteo["jugados"], "partidos_total": conteo["total"], "nombre": equipo.nombre}
 
 async def _reemplazar_atletas_in_place(db: AsyncSession, equipo_id: str, atletas) -> None:
@@ -294,6 +308,7 @@ async def reemplazar_equipo(db: AsyncSession, equipo_id: str, data) -> dict:
     # nueva_participacion: retira la actual y crea una nueva en el mismo grupo/categoria
     equipo.estado = "eliminado"
     await db.flush()
+    await recalc_rankings_equipo(db, equipo.categoria_id, [equipo.grupo_id])
     nuevo = Equipo(categoria_id=equipo.categoria_id, grupo_id=equipo.grupo_id, nombre=(data.nombre.strip() if data.nombre else equipo.nombre), ciudad=data.ciudad.strip() if data.ciudad else equipo.ciudad, estado="aprobado", seed=equipo.seed)
     db.add(nuevo)
     await db.flush()
