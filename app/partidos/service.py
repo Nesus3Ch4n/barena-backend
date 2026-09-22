@@ -1123,7 +1123,9 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
         if len(demoras) >= 2:
             rival = "visitante" if lado == "local" else "local"
             base = evs2[-1].seq
+            # flush 1x1: el batch multi-fila de eventos falla (sentinel UUID)
             db.add(PartidoEvento(partido_id=partido_id, seq=base + 1, tipo="tarjeta_roja", lado=lado, razon="demora", extra={"auto": "demora", "origen_evento": evento.id}))
+            await db.flush()
             db.add(PartidoEvento(partido_id=partido_id, seq=base + 2, tipo="punto", lado=rival, extra={"auto": "demora"}))
             await db.flush()
 
@@ -1261,8 +1263,11 @@ async def iniciar_partido(db: AsyncSession, partido_id: str, sorteo_ganador_id: 
     await db.flush()
     eventos = await _live_eventos(db, partido_id)
     seq = (eventos[-1].seq + 1) if eventos else 1
+    # flush 1x1: el batch multi-fila de eventos falla (sentinel UUID)
     db.add(PartidoEvento(partido_id=partido_id, seq=seq, tipo="sorteo", extra={"equipo_id": sorteo_ganador_id}))
+    await db.flush()
     db.add(PartidoEvento(partido_id=partido_id, seq=seq + 1, tipo="saque_inicial", atleta_id=saque_atleta_id, lado=("local" if saque_equipo_id == partido.equipo_local_id else "visitante")))
+    await db.flush()
     db.add(PartidoEvento(partido_id=partido_id, seq=seq + 2, tipo="inicio"))
     await db.flush()
     return await live_snapshot(db, partido_id)
