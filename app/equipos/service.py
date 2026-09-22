@@ -93,6 +93,7 @@ async def aprobar_equipo(db: AsyncSession, equipo_id: str, grupo_id: str = None,
         equipo.seed = seed
     equipo.estado = "aprobado"
     await db.flush()
+    await recalc_rankings_equipo(db, equipo.categoria_id, [equipo.grupo_id])
     return equipo
 
 async def rechazar_equipo(db: AsyncSession, equipo_id: str):
