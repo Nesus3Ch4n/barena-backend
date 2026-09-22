@@ -1132,7 +1132,7 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
     if tipo == "set_ganado":
         snap = await live_snapshot(db, partido_id)
         ganador_lado = "local" if snap["score"]["local"] > snap["score"]["visitante"] else "visitante"
-        await _cerrar_set(db, partido, ganador_lado)
+        await _cerrar_set(db, partido, ganador_lado, ignorar_seq=seq)
     elif tipo == "descalificacion":
         # amarilla+roja: el set termina aquí, puntos restantes al rival
         rival = "visitante" if lado == "local" else "local"
@@ -1141,17 +1141,30 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
         db.add(PartidoEvento(partido_id=partido_id, seq=seq2, tipo="set_ganado", lado=rival,
                              extra={"origen": "descalificacion", "origen_evento": str(evento.id), "descalificado_atleta_id": atleta_id}))
         await db.flush()
-        await _cerrar_set(db, partido, rival)
+        await _cerrar_set(db, partido, rival, ignorar_seq=seq2)
 
     return await live_snapshot(db, partido_id)
 
-async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str) -> None:
-    """Registra el SetPartido, avanza ganador/finaliza y cambia de lado automáticamente."""
+async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str, ignorar_seq: int = None) -> None:
+    """Registra el SetPartido, avanza ganador/finaliza y cambia de lado automáticamente.
+    ignorar_seq: el propio evento set_ganado recién creado no debe resetear el marcador que cierra."""
     partido_id = partido.id
     snap = await live_snapshot(db, partido_id)
     set_num = snap["current_set"]
     ganador = partido.equipo_local_id if ganador_lado == "local" else partido.equipo_visit_id
-    sp = SetPartido(partido_id=partido_id, numero_set=set_num, pts_local=snap["score"]["local"], pts_visitante=snap["score"]["visitante"], ganador_id=ganador)
+    score_l, score_v = snap["score"]["local"], snap["score"]["visitante"]
+    if ignorar_seq is not None:
+        evs = await _live_eventos(db, partido_id)
+        ult = 0
+        for e in evs:
+            if not e.revocado and e.tipo == "set_ganado" and e.seq != ignorar_seq:
+                ult = e.seq
+        sc = {"local": 0, "visitante": 0}
+        for e in evs:
+            if not e.revocado and e.tipo == "punto" and e.seq > ult:
+                sc[e.lado] = sc.get(e.lado, 0) + 1
+        score_l, score_v = sc["local"], sc["visitante"]
+    sp = SetPartido(partido_id=partido_id, numero_set=set_num, pts_local=score_l, pts_visitante=score_v, ganador_id=ganador)
     db.add(sp)
     await db.flush()
     res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
@@ -1160,8 +1173,8 @@ async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str) -> 
     wins_v = snap["sets_ganados"]["visitante"] + (1 if ganador == partido.equipo_visit_id else 0)
     if cat.sets_x_partido == 2:
         if set_num >= 2:
-            pts_l = sum(s["pts_local"] for s in snap["sets"]) + snap["score"]["local"]
-            pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + snap["score"]["visitante"]
+            pts_l = sum(s["pts_local"] for s in snap["sets"]) + score_l
+            pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + score_v
             if wins_l == 2 or wins_v == 2:
                 partido.ganador_id = partido.equipo_local_id if wins_l == 2 else partido.equipo_visit_id
             elif wins_l == wins_v:
