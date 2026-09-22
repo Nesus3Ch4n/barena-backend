@@ -83,7 +83,7 @@ async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: 
     hechas = sum(1 for p in elim if p.estado != "pendiente")
     snap = None
     try:
-        r2 = await db.execute(_text("SELECT creada_en, criterio, clasificados, emparejamiento, filas FROM clasificacion_congelada WHERE categoria_id = :cid ORDER BY creada_en DESC LIMIT 1"), {"cid": categoria_id})
+        r2 = await db.execute(_text("SELECT creada_en, criterio, clasificados, emparejamiento, filas FROM clasificacion_congelada WHERE categoria_id = CAST(:cid AS UUID) ORDER BY creada_en DESC LIMIT 1"), {"cid": categoria_id})
         row = r2.mappings().first()
         if row:
             snap = {"creada_en": row["creada_en"].isoformat() if row["creada_en"] else None, "criterio": row["criterio"], "clasificados": row["clasificados"], "emparejamiento": row["emparejamiento"], "filas": row["filas"]}
