@@ -48,7 +48,7 @@ class Categoria(Base):
     puntos_x_set: Mapped[int] = mapped_column(Integer, default=21)
     avance_x_grupo: Mapped[int] = mapped_column(Integer, default=2)
     clasificados: Mapped[int] = mapped_column(Integer, nullable=True)
-    criterio_emparejamiento: Mapped[str] = mapped_column(String(20), default="directo")
+    # criterio_emparejamiento: reactivar cuando migración 013 esté aplicada en prod
     clasificacion: Mapped[str] = mapped_column(String(20), default="grupos")
     criterio_clasif: Mapped[str] = mapped_column(String(200), default="PG>CS>CP>JL")
     ranking_general_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
