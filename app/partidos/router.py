@@ -91,15 +91,6 @@ async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: 
         snap = None
     return {"success": True, "data": {"pendientes": pend, "con_resultado": hechas, "congelada": snap}, "error": None}
 
-@categoria_fixture_router.post("/_migracion014", response_model=dict)
-async def _migracion014_tmp(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
-    # TEMPORAL-ELIMINAR: aplica migracion 014 (DDL fijo, sin inputs)
-    from sqlalchemy import text as _text
-    await db.execute(_text("ALTER TABLE categorias ADD COLUMN IF NOT EXISTS reglas_partido JSONB DEFAULT '{}'::jsonb"))
-    await db.flush()
-    cols = list((await db.execute(_text("SELECT column_name FROM information_schema.columns WHERE table_name='categorias' AND column_name='reglas_partido'"))).scalars().all())
-    return {"success": True, "data": {"columnas": cols}, "error": None}
-
 @categoria_fixture_router.post("/sincronizar", response_model=dict)
 async def sincronizar(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
