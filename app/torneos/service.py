@@ -319,6 +319,7 @@ async def update_categoria(db: AsyncSession, categoria_id: str, data) -> Categor
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no existe", {"id": categoria_id})
     upd = data.model_dump(exclude_unset=True)
+    reglas = upd.pop("reglas_partido", None)
     for k, v in upd.items():
         if v is not None:
             if k == "nombre" and isinstance(v, str):
@@ -326,6 +327,14 @@ async def update_categoria(db: AsyncSession, categoria_id: str, data) -> Categor
             else:
                 setattr(cat, k, v)
     await db.flush()
+    if reglas is not None:
+        from sqlalchemy import text as _text
+        ex = await db.execute(_text("SELECT 1 FROM information_schema.columns WHERE table_name='categorias' AND column_name='reglas_partido'"))
+        if not ex.scalar_one_or_none():
+            raise AppError(409, "MIGRACION_PENDIENTE", "Aplica la migración 014 para guardar reglas de partido")
+        import json as _json
+        await db.execute(_text("UPDATE categorias SET reglas_partido = CAST(:r AS JSONB) WHERE id = CAST(:cid AS UUID)"), {"r": _json.dumps(reglas), "cid": categoria_id})
+        await db.flush()
     return cat
 
 async def delete_categoria(db: AsyncSession, categoria_id: str):

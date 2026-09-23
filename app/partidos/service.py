@@ -553,15 +553,16 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no encontrada")
 
-    # 2-set: tope = puntos_x_set elegido (15 o 21) sin alargues
-    if cat.sets_x_partido == 2:
+    # 2-set: tope = puntos configurados, sin alargues
+    _rg2 = reglas_partido(cat)
+    if _rg2["sets_x_partido"] == 2:
         if len(sets) != 2:
             raise AppError(400, "SETS_INVALIDOS", "Formato 2 sets requiere exactamente 2 sets")
         numeros = [s["numero_set"] for s in sets]
         if sorted(numeros) != [1, 2]:
             raise AppError(400, "NUMERO_SET_INVALIDO", "Sets deben ser 1 y 2")
-        cap = cat.puntos_x_set
-        requiere2 = getattr(cat, "diferencia_dos_puntos", True)
+        cap = _rg2["puntos_set"]
+        requiere2 = _rg2["dif2"]
         for s in sets:
             w = max(s["pts_local"], s["pts_visitante"])
             l = min(s["pts_local"], s["pts_visitante"])
@@ -620,13 +621,12 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     if sorted(numeros) != list(range(1, len(sets) + 1)):
         raise AppError(400, "NUMERO_SET_INVALIDO", "Los sets deben ser numerados secuencialmente desde 1")
 
-    # Validate pts >= 15/21/25 and diferencia de 2 (según termino voleibol)
-    # En voleibol, el set decisivo (último) se juega a 15 si el formato es a 3 o 5 sets
+    # Validate pts según reglas (tie-break configurable, alargue sin tope)
+    _rgv = reglas_partido(cat)
     def _puntos_requeridos(num_set: int) -> int:
-        # Si es el set decisivo y formato es mejor de 3 o 5, el último set es a 15
-        if cat.sets_x_partido in (3, 5) and num_set == cat.sets_x_partido:
-            return 15
-        return cat.puntos_x_set
+        if _rgv["sets_x_partido"] in (3, 5) and num_set == _rgv["sets_x_partido"]:
+            return _rgv["tiebreak_pts"] if _rgv["tiebreak_on"] else _rgv["puntos_set"]
+        return _rgv["puntos_set"]
     for s in sets:
         req = _puntos_requeridos(s["numero_set"])
         winner_pts = max(s["pts_local"], s["pts_visitante"])
@@ -634,7 +634,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
         if s["pts_local"] == s["pts_visitante"]:
             raise AppError(400, "SET_EMPATE", "Set no puede empatar")
         # con alargue: mínimo req puntos y ventaja de 2, sin límite máximo
-        if getattr(cat, "diferencia_dos_puntos", True):
+        if _rgv["dif2"]:
             if winner_pts < req or winner_pts - loser_pts < 2:
                 raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']}: se gana con mínimo {req} y ventaja de 2 (alargue sin límite)")
         elif winner_pts < req:
@@ -764,6 +764,42 @@ async def eliminar_partido(db: AsyncSession, partido_id: str, is_organizador: bo
 INDIVIDUAL_TIPOS = {"saque_directo", "defensa", "ataque", "bloqueo", "error_saque", "error_ataque"}
 TIEMPOS_LIMITE = {"tiempo_muerto": 2, "tiempo_receso": 2, "tiempo_medico": None}
 TIEMPOS_DURACION_SEG = {"tiempo_muerto": 30, "tiempo_receso": 180, "tiempo_medico": 300}
+
+def reglas_partido(cat) -> dict:
+    """Reglas efectivas: columnas legacy mandan si el JSON no define; defaults = clásico FIVB."""
+    import json as _json
+    raw = getattr(cat, "reglas_partido", None) or {}
+    if isinstance(raw, str):
+        try:
+            raw = _json.loads(raw)
+        except Exception:
+            raw = {}
+    g = dict(raw.get("general", {}) or {})
+    t = dict(raw.get("tiempos", {}) or {})
+    c = dict(raw.get("cambios", {}) or {})
+    n_sets = g.get("sets_x_partido") or getattr(cat, "sets_x_partido", 3) or 3
+    pts = g.get("puntos_set") or getattr(cat, "puntos_x_set", 21) or 21
+    dif2 = getattr(cat, "diferencia_dos_puntos", True)
+    if g.get("dif2") is not None:
+        dif2 = bool(g.get("dif2"))
+    tb_on = g.get("tiebreak_on", True)
+    tb_pts = g.get("tiebreak_pts") or 15
+    return {
+        "sets_x_partido": n_sets,
+        "puntos_set": pts,
+        "tiebreak_on": bool(tb_on),
+        "tiebreak_pts": tb_pts,
+        "dif2": bool(dif2),
+        "finalizacion": g.get("finalizacion") or "al_ganar",
+        "tiempos_enabled": t.get("enabled", True),
+        "tiempos_por_set": t.get("por_set", 2),
+        "tiempo_duracion_seg": t.get("duracion_seg", 30),
+        "intervalos_on": bool(t.get("intervalos_on", False)),
+        "intervalo_min": t.get("intervalo_min", 1),
+        "cambios_enabled": bool(c.get("enabled", False)),
+        "frec_normal": c.get("frec_normal", 7),
+        "frec_tiebreak": c.get("frec_tiebreak", 5),
+    }
 SANCION_TIPOS = {"advertencia", "penalizacion", "descalificacion"}
 # accion individual -> (columna principal, columna de intentos o None)
 STAT_COLS = {
@@ -831,9 +867,10 @@ async def _live_eventos(db: AsyncSession, partido_id: str) -> list[PartidoEvento
     return list(res.scalars())
 
 def _set_target(cat: Categoria, set_num: int) -> int:
-    if cat.sets_x_partido in (3, 5) and set_num == cat.sets_x_partido:
-        return 15
-    return cat.puntos_x_set
+    rg = reglas_partido(cat)
+    if rg["sets_x_partido"] in (3, 5) and set_num == rg["sets_x_partido"]:
+        return rg["tiebreak_pts"] if rg["tiebreak_on"] else rg["puntos_set"]
+    return rg["puntos_set"]
 
 def _punto_numero_en_set(eventos: list[PartidoEvento], set_ganado_seq: int) -> int:
     return sum(1 for e in eventos if not e.revocado and e.tipo == "punto" and e.seq > set_ganado_seq) + 1
@@ -849,6 +886,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoría no encontrada")
     res_t = await db.execute(select(Rama.torneo_id).where(Rama.id == cat.rama_id))
     torneo_id = res_t.scalar_one_or_none()
+    _rg = reglas_partido(cat)
 
     equipo_ids = [eid for eid in (partido.equipo_local_id, partido.equipo_visit_id) if eid]
     equipos: dict = {}
@@ -1044,9 +1082,9 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
     # Lados invertidos (cambio de lado impar)
     n_cambios = sum(1 for e in activos if e.tipo == "cambio_lado")
 
-    # ¿Se puede cerrar el set? (tope con/sin alargues)
+    # ¿Se puede cerrar el set? (tope con/sin alargues, según reglas)
     target = _set_target(cat, current_set)
-    require2 = getattr(cat, "diferencia_dos_puntos", True)
+    require2 = _rg["dif2"]
     l, v = score["local"], score["visitante"]
     w = max(l, v)
     lo = min(l, v)
@@ -1072,9 +1110,9 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
             "equipo_visit_id": partido.equipo_visit_id,
             "ganador_id": partido.ganador_id,
             "categoria": {
-                "sets_x_partido": cat.sets_x_partido,
-                "puntos_x_set": cat.puntos_x_set,
-                "diferencia_dos_puntos": getattr(cat, "diferencia_dos_puntos", True),
+                "sets_x_partido": _rg["sets_x_partido"],
+                "puntos_x_set": _rg["puntos_set"],
+                "diferencia_dos_puntos": _rg["dif2"],
             },
         },
         "equipos": equipos,
@@ -1089,7 +1127,8 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         "rotacion": rotacion,
         "proximo_saque": proximo,
         "tiempos": tiempos,
-        "tiempos_duracion_seg": TIEMPOS_DURACION_SEG,
+        "tiempos_duracion_seg": {**TIEMPOS_DURACION_SEG, "tiempo_muerto": _rg["tiempo_duracion_seg"]},
+        "reglas": _rg,
         "tarjetas": tarjetas,
         "sanciones_detalle": sanciones_detalle,
         "sanciones_jugador": sanciones_jugador,
@@ -1143,7 +1182,11 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
     elif tipo in TIEMPOS_LIMITE:
         if lado not in ("local", "visitante"):
             raise AppError(400, "LADO_REQUERIDO", f"{tipo} requiere lado local/visitante")
-        limite = TIEMPOS_LIMITE[tipo]
+        res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+        rg = reglas_partido(res_cat.scalar_one_or_none() or partido)
+        if tipo == "tiempo_muerto" and not rg["tiempos_enabled"]:
+            raise AppError(409, "TIEMPOS_DESACTIVADOS", "Los tiempos muertos están desactivados en este torneo")
+        limite = rg["tiempos_por_set"] if tipo == "tiempo_muerto" else TIEMPOS_LIMITE[tipo]
         if limite is not None:
             snap = await live_snapshot(db, partido_id)
             usados = snap["tiempos"][lado][tipo]
@@ -1236,6 +1279,8 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
     await db.flush()
     if tipo == "individual" and atleta_id:
         await resync_atleta_partido(db, partido_id, atleta_id)
+    if tipo == "punto" and partido.estado == "en_juego":
+        await _auto_cambio_lado(db, partido)
 
     if tipo == "tarjeta_amarilla" and razon == "demora":
         # 2da demora del set: escalada automática a roja + punto y saque al rival
@@ -1270,6 +1315,34 @@ async def live_evento(db: AsyncSession, partido_id: str, data) -> dict:
 
     return await live_snapshot(db, partido_id)
 
+async def _auto_cambio_lado(db: AsyncSession, partido: Partido) -> None:
+    """Cambio de campo automático cada N puntos combinados del set (reglas)."""
+    from sqlalchemy import func as _func
+    res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+    rg = reglas_partido(res_cat.scalar_one_or_none())
+    if not rg["cambios_enabled"]:
+        return
+    snap = await live_snapshot(db, partido.id)
+    total = snap["score"]["local"] + snap["score"]["visitante"]
+    if total <= 0:
+        return
+    es_tie = rg["sets_x_partido"] in (3, 5) and snap["current_set"] == rg["sets_x_partido"] and rg["tiebreak_on"]
+    n = rg["frec_tiebreak"] if es_tie else rg["frec_normal"]
+    try:
+        n = max(1, int(n))
+    except Exception:
+        return
+    evs = await _live_eventos(db, partido.id)
+    ult = 0
+    for e in evs:
+        if not e.revocado and e.tipo == "set_ganado":
+            ult = e.seq
+    hechos = sum(1 for e in evs if not e.revocado and e.tipo == "cambio_lado" and e.seq > ult)
+    if total // n > hechos:
+        base = evs[-1].seq if evs else 0
+        db.add(PartidoEvento(partido_id=partido.id, seq=base + 1, tipo="cambio_lado", extra={"auto": True, "cada": n}))
+        await db.flush()
+
 async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str, ignorar_seq: int = None) -> None:
     """Registra el SetPartido, avanza ganador/finaliza y cambia de lado automáticamente.
     ignorar_seq: el propio evento set_ganado recién creado no debe resetear el marcador que cierra."""
@@ -1294,9 +1367,16 @@ async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str, ign
     await db.flush()
     res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
     cat = res_cat.scalar_one_or_none()
+    rg = reglas_partido(cat)
+    n_sets = rg["sets_x_partido"]
     wins_l = snap["sets_ganados"]["local"] + (1 if ganador == partido.equipo_local_id else 0)
     wins_v = snap["sets_ganados"]["visitante"] + (1 if ganador == partido.equipo_visit_id else 0)
-    if cat.sets_x_partido == 2:
+    if rg["finalizacion"] == "todos_los_sets":
+        # se juegan todos los sets; el ganador es quien más sets ganó
+        if wins_l + wins_v >= n_sets:
+            partido.ganador_id = partido.equipo_local_id if wins_l > wins_v else (partido.equipo_visit_id if wins_v > wins_l else None)
+            partido.estado = "finalizado"
+    elif n_sets == 2:
         if set_num >= 2:
             pts_l = sum(s["pts_local"] for s in snap["sets"]) + score_l
             pts_v = sum(s["pts_visitante"] for s in snap["sets"]) + score_v
@@ -1305,11 +1385,11 @@ async def _cerrar_set(db: AsyncSession, partido: Partido, ganador_lado: str, ign
             elif wins_l == wins_v:
                 partido.ganador_id = partido.equipo_local_id if pts_l > pts_v else (partido.equipo_visit_id if pts_v > pts_l else None)
             partido.estado = "finalizado"
-    elif cat.sets_x_partido == 1:
+    elif n_sets == 1:
         partido.ganador_id = ganador
         partido.estado = "finalizado"
     else:
-        sets_needed = (cat.sets_x_partido // 2) + 1
+        sets_needed = (n_sets // 2) + 1
         if wins_l >= sets_needed:
             partido.ganador_id = partido.equipo_local_id
             partido.estado = "finalizado"

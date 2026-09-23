@@ -105,6 +105,7 @@ class CategoriaUpdate(BaseModel):
     avance_x_grupo: Optional[int] = Field(default=None, ge=1, le=4)
     clasificados: Optional[int] = Field(default=None, ge=1, le=64)
     criterio_emparejamiento: Optional[str] = Field(default=None, pattern="^(directo|ladder)$")
+    reglas_partido: Optional[dict] = None
     clasificacion: Optional[str] = Field(default=None, pattern="^(grupos|ranking_general)$")
     criterio_clasif: Optional[str] = None
     ranking_general_enabled: Optional[bool] = None
