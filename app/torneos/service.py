@@ -201,6 +201,70 @@ async def get_public_by_slug(db: AsyncSession, slug: str):
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público o no existe", {"slug": slug})
     return torneo
 
+async def _tabla_jueces_ok(db: AsyncSession) -> bool:
+    from sqlalchemy import text as _text
+    res = await db.execute(_text("SELECT 1 FROM information_schema.tables WHERE table_name='torneo_jueces'"))
+    return bool(res.scalar_one_or_none())
+
+async def _torneo_para_jueces(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool = False):
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    if torneo.organizador_id != user_id and not is_super and not is_org:
+        raise AppError(403, "FORBIDDEN", "No eres organizador de este torneo")
+    if not await _tabla_jueces_ok(db):
+        raise AppError(409, "MIGRACION_PENDIENTE", "Aplica la migración 015 para gestionar jueces")
+    return torneo
+
+async def listar_jueces(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool = False, is_org: bool = False):
+    from app.torneos.models import TorneoJuez
+    from app.auth.models import User, Profile
+    from app.auth.service import get_roles_for_user
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    res = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == torneo_id).order_by(TorneoJuez.creado_en))
+    out = []
+    for tj in res.scalars().all():
+        res2 = await db.execute(select(User).where(User.id == tj.user_id))
+        u = res2.scalar_one_or_none()
+        if not u:
+            continue
+        res3 = await db.execute(select(Profile).where(Profile.id == tj.user_id))
+        p = res3.scalar_one_or_none()
+        out.append({"user_id": tj.user_id, "email": u.email,
+                    "nombre_completo": p.nombre_completo if p else None,
+                    "roles": await get_roles_for_user(db, tj.user_id)})
+    return out
+
+async def vincular_juez(db: AsyncSession, torneo_id: str, email: str, user_id: str, is_super: bool, is_org: bool = False):
+    from app.torneos.models import TorneoJuez
+    from app.auth.models import User
+    from app.auth.service import get_roles_for_user
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    res = await db.execute(select(User).where(User.email == email.strip().lower()))
+    u = res.scalar_one_or_none()
+    if not u:
+        raise NotFound("USER_NOT_FOUND", "No existe usuario con ese correo", {"email": email})
+    roles = await get_roles_for_user(db, u.id)
+    if "juez_anotador" not in roles:
+        raise AppError(400, "NO_ES_JUEZ", "El usuario no tiene rol de juez", {"email": email})
+    res2 = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == torneo_id, TorneoJuez.user_id == u.id))
+    if not res2.scalar_one_or_none():
+        db.add(TorneoJuez(torneo_id=torneo_id, user_id=u.id))
+        await db.flush()
+    return {"user_id": u.id, "email": u.email, "vinculado": True}
+
+async def desvincular_juez(db: AsyncSession, torneo_id: str, target_id: str, user_id: str, is_super: bool, is_org: bool = False):
+    from app.torneos.models import TorneoJuez
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    res = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == torneo_id, TorneoJuez.user_id == target_id))
+    tj = res.scalar_one_or_none()
+    if not tj:
+        raise NotFound("JUEZ_NO_VINCULADO", "Ese juez no está vinculado", {"user_id": target_id})
+    await db.delete(tj)
+    await db.flush()
+    return {"user_id": target_id, "vinculado": False}
+
 async def delete_torneo(db: AsyncSession, torneo_id: str):
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()

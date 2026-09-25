@@ -7,7 +7,7 @@ from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
 from app.partidos.models import Partido
 from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -114,12 +114,14 @@ async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None,
 
 @router.patch("/{partido_id}/programar", response_model=dict)
 async def programar(partido_id: str, body: ProgramarIn, request: Request, user=Depends(require_roles("organizador", "juez_anotador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
     partido = await programar_partido(db, partido_id, body.cancha, body.fecha_hora, is_organizador=is_org)
     return {"success": True, "data": {"id": partido.id, "cancha": partido.cancha, "fecha_hora": partido.fecha_hora.isoformat() if partido.fecha_hora else None}, "error": None}
 
 @router.post("/{partido_id}/resultado", response_model=dict)
 async def resultado(partido_id: str, body: ResultadoIn, request: Request, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     sets = [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "duracion_min": s.duracion_min} for s in body.sets]
     is_org = "organizador" in getattr(request.state, "roles", []) or "super_admin" in getattr(request.state, "roles", [])
     tarjetas = {
@@ -155,19 +157,23 @@ async def live_public(partido_id: str, db: AsyncSession = Depends(get_db)):
     return {"success": True, "data": await live_snapshot(db, partido_id), "error": None}
 
 @router.post("/{partido_id}/live", response_model=dict)
-async def live_post(partido_id: str, body: LiveEventoIn, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def live_post(partido_id: str, body: LiveEventoIn, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     return {"success": True, "data": await live_evento(db, partido_id, body), "error": None}
 
 @router.post("/{partido_id}/live/undo", response_model=dict)
-async def live_undo_endpoint(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def live_undo_endpoint(partido_id: str, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     return {"success": True, "data": await live_undo(db, partido_id), "error": None}
 
 @router.post("/{partido_id}/iniciar", response_model=dict)
-async def iniciar(partido_id: str, body: IniciarIn, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def iniciar(partido_id: str, body: IniciarIn, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     return {"success": True, "data": await iniciar_partido(db, partido_id, body.sorteo_ganador_id, body.saque_equipo_id, body.saque_atleta_id, user.id, body.orden_local, body.orden_visitante), "error": None}
 
 @router.post("/{partido_id}/finalizar", response_model=dict)
-async def finalizar(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+async def finalizar(partido_id: str, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     return {"success": True, "data": await finalizar_partido(db, partido_id), "error": None}
 
 @router.patch("/{partido_id}", response_model=dict)

@@ -31,7 +31,7 @@ async def verify_categoria_in_torneo(db: AsyncSession, categoria_id: str, torneo
         raise AppError(400, "CATEGORIA_NO_PERTENECE", "Categoria no pertenece a este torneo")
     return cat
 
-async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, user_id: str, is_super: bool, is_org: bool = False) -> Equipo:
+async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, user_id: str, is_super: bool, is_org: bool = False) -> tuple:
     torneo = await verify_torneo_owner(db, torneo_id, user_id, is_super, is_org)
     cat = await verify_categoria_in_torneo(db, data.categoria_id, torneo_id)
     # validar atletas: debe haber 2 titulares
@@ -48,7 +48,18 @@ async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, us
     db.add(equipo)
     await db.flush()
 
+    avisos = []
     for atleta_in in data.atletas:
+        cod_ref = (getattr(atleta_in, "codigo_reclamo", None) or "").strip().upper() or None
+        hereda_uid = None
+        if cod_ref:
+            res_ref = await db.execute(select(Atleta).where(Atleta.codigo_reclamo == cod_ref))
+            ref = res_ref.scalar_one_or_none()
+            if not ref:
+                raise NotFound("ATLETA_NOT_FOUND", "Código de perfil no registrado", {"codigo": cod_ref})
+            if ref.nombre_completo.strip().lower() != atleta_in.nombre_completo.strip().lower():
+                avisos.append(f"El nombre difiere del registrado para {cod_ref}: {ref.nombre_completo}")
+            hereda_uid = ref.user_id
         codigo = gen_codigo()
         # ensure unique codigo
         for _ in range(3):
@@ -56,10 +67,10 @@ async def create_equipo(db: AsyncSession, torneo_id: str, data: EquipoCreate, us
             if not res.scalar_one_or_none():
                 break
             codigo = gen_codigo()
-        atleta = Atleta(equipo_id=equipo.id, nombre_completo=atleta_in.nombre_completo, posicion=atleta_in.posicion, doc_identidad=atleta_in.doc_identidad, codigo_reclamo=codigo)
+        atleta = Atleta(equipo_id=equipo.id, nombre_completo=atleta_in.nombre_completo, posicion=atleta_in.posicion, doc_identidad=atleta_in.doc_identidad, codigo_reclamo=codigo, user_id=hereda_uid)
         db.add(atleta)
     await db.flush()
-    return equipo
+    return equipo, avisos
 
 async def list_equipos(db: AsyncSession, torneo_id: str, categoria_id: str = None, grupo_id: str = None, estado: str = None):
     # necesita verificar torneo existe pero no owner check for reading (public logic?)

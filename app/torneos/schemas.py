@@ -73,6 +73,9 @@ class TorneoCreate(BaseModel):
     def normalize_deporte(cls, v):
         return v.lower().strip() if v else v
 
+class JuezVincularIn(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
 class VisibilidadUpdate(BaseModel):
     fixture_visible: Optional[bool] = None
     grupos_visible: Optional[bool] = None

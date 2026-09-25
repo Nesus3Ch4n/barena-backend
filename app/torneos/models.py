@@ -62,3 +62,9 @@ class Grupo(Base):
     categoria_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("categorias.id", ondelete="CASCADE"), nullable=False)
     nombre: Mapped[str] = mapped_column(String(10), nullable=False)
     orden: Mapped[int] = mapped_column(Integer, default=1)
+
+class TorneoJuez(Base):
+    __tablename__ = "torneo_jueces"
+    torneo_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("torneos.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    creado_en: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())

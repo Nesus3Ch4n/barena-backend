@@ -6,6 +6,7 @@ class AtletaIn(BaseModel):
     posicion: str = Field(default="titular", pattern="^(titular|libero)$")
     doc_identidad: Optional[str] = None
     fecha_nacimiento: Optional[str] = None
+    codigo_reclamo: Optional[str] = Field(default=None, min_length=4, max_length=12)
 
 class EquipoCreate(BaseModel):
     nombre: str = Field(min_length=2, max_length=80)

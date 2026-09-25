@@ -830,6 +830,36 @@ async def descalificados_set_actual(db: AsyncSession, partido_id: str) -> set:
             ult = e.seq
     return {e.atleta_id for e in evs if not e.revocado and e.tipo == "descalificacion" and e.seq > ult and e.atleta_id}
 
+async def verify_juez_partido(db: AsyncSession, partido_id: str, user_id: str, roles: list) -> str:
+    """Jueces solo operan partidos de torneos vinculados. Org/admin pasan. Devuelve torneo_id."""
+    if "super_admin" in roles or "organizador" in roles:
+        return ""
+    if "juez_anotador" not in roles:
+        from app.shared.errors import Forbidden
+        raise Forbidden("Requiere rol de juez, organizador o super admin")
+    from app.torneos.models import Categoria, Rama, TorneoJuez
+    res = await db.execute(select(Partido).where(Partido.id == partido_id))
+    partido = res.scalar_one_or_none()
+    if not partido:
+        from app.shared.errors import NotFound
+        raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
+    res2 = await db.execute(
+        select(Rama.torneo_id).join(Categoria, Categoria.rama_id == Rama.id).where(Categoria.id == partido.categoria_id)
+    )
+    torneo_id = res2.scalar_one_or_none()
+    if not torneo_id:
+        from app.shared.errors import NotFound
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no encontrado")
+    try:
+        res3 = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == str(torneo_id), TorneoJuez.user_id == str(user_id)))
+        vinculado = res3.scalar_one_or_none()
+    except Exception:
+        return str(torneo_id)  # sin tabla torneo_jueces (migración 015 pendiente): modo legacy
+    if not vinculado:
+        from app.shared.errors import Forbidden
+        raise Forbidden("No estás vinculado como juez de este torneo")
+    return str(torneo_id)
+
 async def resync_atleta_partido(db: AsyncSession, partido_id: str, atleta_id: str) -> None:
     """Recalcula EstadisticaAtleta desde eventos individuales activos (idempotente: undo incluido)."""
     from app.estadisticas.models import EstadisticaAtleta

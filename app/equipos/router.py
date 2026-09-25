@@ -30,8 +30,8 @@ async def _verify_equipo_owner(db: AsyncSession, equipo_id: str, user_id: str, i
 async def crear_equipo(torneo_id: str, body: EquipoCreate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
-    equipo = await create_equipo(db, torneo_id, body, user.id, is_super, is_org)
-    return {"success": True, "data": {"id": equipo.id, "nombre": equipo.nombre, "estado": equipo.estado, "categoria_id": equipo.categoria_id}, "error": None}
+    equipo, avisos = await create_equipo(db, torneo_id, body, user.id, is_super, is_org)
+    return {"success": True, "data": {"id": equipo.id, "nombre": equipo.nombre, "estado": equipo.estado, "categoria_id": equipo.categoria_id, "avisos": avisos}, "error": None}
 
 @router.get("", response_model=dict)
 async def listar_equipos(torneo_id: str, categoria_id: str = None, grupo_id: str = None, estado: str = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -50,13 +50,15 @@ async def bulk_equipos(torneo_id: str, request: Request, background: BackgroundT
         raise AppError(400, "BULK_LIMIT", "Máximo 50 equipos por bulk")
     await verify_torneo_owner(db, torneo_id, user.id, is_super, is_org)
     creados = []
+    avisos_all = []
     for item in body:
         from app.equipos.schemas import EquipoCreate
         eq_data = EquipoCreate(**item)
-        eq = await create_equipo(db, torneo_id, eq_data, user.id, is_super, is_org)
+        eq, avisos = await create_equipo(db, torneo_id, eq_data, user.id, is_super, is_org)
         creados.append(eq.id)
+        avisos_all.extend(avisos)
     await db.commit()
-    return {"success": True, "data": {"creados": len(creados), "ids": creados}, "error": None}
+    return {"success": True, "data": {"creados": len(creados), "ids": creados, "avisos": avisos_all}, "error": None}
 
 @equipo_router.patch("/{equipo_id}/aprobar", response_model=dict)
 async def aprobar(equipo_id: str, body: EquipoAprobarIn, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

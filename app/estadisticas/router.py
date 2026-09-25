@@ -1,15 +1,17 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.estadisticas.schemas import EstadisticaIn
 from app.estadisticas.service import upsert_estadistica, list_estadisticas, get_atleta_stats
+from app.partidos.service import verify_juez_partido
 
 router = APIRouter(prefix="/partidos/{partido_id}/estadisticas", tags=["estadisticas"])
 atleta_router = APIRouter(prefix="/atletas", tags=["estadisticas"])
 
 @router.post("", response_model=dict)
-async def upsert(partido_id: str, body: EstadisticaIn, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+async def upsert(partido_id: str, body: EstadisticaIn, request: Request, user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     est = await upsert_estadistica(db, partido_id, body)
     return {"success": True, "data": {"id": est.id, "atleta_id": est.atleta_id, "puntos_total": est.ataques_pts + est.bloqueos_pts + est.saques_directos}, "error": None}
 
