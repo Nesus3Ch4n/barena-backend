@@ -91,6 +91,26 @@ async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: 
         snap = None
     return {"success": True, "data": {"pendientes": pend, "con_resultado": hechas, "congelada": snap}, "error": None}
 
+@categoria_fixture_router.post("/_migracion015", response_model=dict)
+async def _migracion015_tmp(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    # TEMPORAL-ELIMINAR: aplica migracion 015 + tabla notificaciones (DDL fijo, sin inputs)
+    from sqlalchemy import text as _text
+    await db.execute(_text("""CREATE TABLE IF NOT EXISTS torneo_jueces (
+        torneo_id UUID NOT NULL REFERENCES torneos(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (torneo_id, user_id))"""))
+    await db.execute(_text("""CREATE TABLE IF NOT EXISTS notificaciones (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tipo VARCHAR(30) NOT NULL DEFAULT 'general', titulo VARCHAR(120) NOT NULL, cuerpo TEXT NULL,
+        partido_id UUID NULL REFERENCES partidos(id) ON DELETE CASCADE,
+        leida BOOLEAN NOT NULL DEFAULT FALSE, creada_en TIMESTAMPTZ NOT NULL DEFAULT now())"""))
+    await db.execute(_text("CREATE INDEX IF NOT EXISTS ix_notif_user ON notificaciones (user_id, creada_en DESC)"))
+    await db.flush()
+    tj = (await db.execute(_text("SELECT to_regclass('public.torneo_jueces')"))).scalar()
+    nt = (await db.execute(_text("SELECT to_regclass('public.notificaciones')"))).scalar()
+    return {"success": True, "data": {"torneo_jueces": str(tj), "notificaciones": str(nt)}, "error": None}
+
 @categoria_fixture_router.post("/sincronizar", response_model=dict)
 async def sincronizar(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
