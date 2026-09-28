@@ -670,6 +670,33 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     await _avanzar_ganador(db, partido)
     return partido
 
+async def list_mis_partidos(db: AsyncSession, user_id: str):
+    from app.torneos.models import Categoria, Rama, Torneo
+    from app.equipos.models import Equipo
+    res = await db.execute(
+        select(Partido, Torneo.nombre, Categoria.nombre, Rama.tipo)
+        .join(Categoria, Partido.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .join(Torneo, Rama.torneo_id == Torneo.id)
+        .where(Partido.arbitro_id == str(user_id))
+        .order_by(Partido.fecha_hora.asc().nulls_last(), Partido.fase)
+    )
+    out = []
+    for p, t_nom, c_nom, r_tipo in res.all():
+        out.append({"id": p.id, "torneo_id": None, "torneo_nombre": t_nom, "rama_tipo": r_tipo,
+                    "categoria_id": p.categoria_id, "categoria_nombre": c_nom, "grupo_id": p.grupo_id,
+                    "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id,
+                    "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None,
+                    "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo})
+    if out:
+        eids = {x for p in out for x in (p["local"], p["visit"]) if x}
+        res2 = await db.execute(select(Equipo).where(Equipo.id.in_(eids)))
+        nombres = {e.id: e.nombre for e in res2.scalars().all()}
+        for p in out:
+            p["local_nombre"] = nombres.get(p["local"], "Por definir")
+            p["visit_nombre"] = nombres.get(p["visit"], "Por definir")
+    return out
+
 async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None):
     query = select(Partido)
     if categoria_id:
@@ -727,6 +754,36 @@ async def crear_partido_manual(db: AsyncSession, data: dict) -> Partido:
     await db.flush()
     return p
 
+async def _asignar_arbitro(db: AsyncSession, partido: Partido, arbitro_id: str) -> None:
+    """Asigna juez al partido (debe estar vinculado al torneo) + notifica."""
+    from app.auth.models import User
+    from app.auth.service import get_roles_for_user
+    from app.torneos.models import Categoria, Rama, TorneoJuez
+    from app.notificaciones.router import crear_notificacion
+    res = await db.execute(select(User).where(User.id == arbitro_id))
+    if not res.scalar_one_or_none():
+        raise NotFound("USER_NOT_FOUND", "Juez no existe", {"id": arbitro_id})
+    roles = await get_roles_for_user(db, arbitro_id)
+    if "juez_anotador" not in roles and "organizador" not in roles and "super_admin" not in roles:
+        raise AppError(400, "NO_ES_JUEZ", "El usuario no tiene rol de juez")
+    res2 = await db.execute(select(Rama.torneo_id).join(Categoria, Categoria.rama_id == Rama.id).where(Categoria.id == partido.categoria_id))
+    torneo_id = res2.scalar_one_or_none()
+    if torneo_id and "juez_anotador" in roles and "organizador" not in roles and "super_admin" not in roles:
+        res3 = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == str(torneo_id), TorneoJuez.user_id == str(arbitro_id)))
+        if not res3.scalar_one_or_none():
+            raise AppError(409, "JUEZ_NO_VINCULADO", "Vincula al juez al torneo antes de asignarlo")
+    anterior = partido.arbitro_id
+    partido.arbitro_id = arbitro_id
+    await db.flush()
+    if str(anterior or "") != str(arbitro_id):
+        res4 = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+        cat = res4.scalar_one_or_none()
+        await crear_notificacion(db, str(arbitro_id), "asignacion",
+                                 f"Te asignaron un partido ({FASE_LABEL_NICE.get(partido.fase, partido.fase)})",
+                                 f"Categoría: {cat.nombre if cat else ''}", partido.id)
+
+FASE_LABEL_NICE = {"grupos": "Fase de grupos", "cuartos": "Cuartos", "semi": "Semifinal", "final": "Final", "tercer_puesto": "Tercer puesto"}
+
 async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict, is_organizador: bool = False) -> Partido:
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()
@@ -734,9 +791,12 @@ async def actualizar_partido(db: AsyncSession, partido_id: str, data: dict, is_o
         raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
     if partido.estado == "finalizado" and not is_organizador:
         raise AppError(400, "PARTIDO_FINALIZADO", "No se puede editar un partido finalizado - solo organizador")
-    for k in ["grupo_id", "fase", "llave", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo"]:
+    for k in ["grupo_id", "fase", "llave", "equipo_local_id", "equipo_visit_id", "cancha", "fecha_hora", "bracket_tipo", "arbitro_id"]:
         if k in data and data[k] is not None:
-            setattr(partido, k, data[k])
+            if k == "arbitro_id":
+                await _asignar_arbitro(db, partido, data[k])
+            else:
+                setattr(partido, k, data[k])
     # validate equipos if changed
     if data.get("equipo_local_id") or data.get("equipo_visit_id"):
         cat_id = partido.categoria_id

@@ -98,3 +98,4 @@ class PartidoUpdate(BaseModel):
     cancha: Optional[str] = Field(None, max_length=50)
     fecha_hora: Optional[datetime] = None
     bracket_tipo: Optional[str] = Field(default=None, pattern="^(general|diamante|oro)$")
+    arbitro_id: Optional[str] = None

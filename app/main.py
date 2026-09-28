@@ -22,6 +22,7 @@ from app.rankings.router import router as rankings_router, categoria_router as r
 from app.reportes.router import router as reportes_router
 from app.config.router import router as config_router
 from app.admin.router import router as admin_perfiles_router
+from app.notificaciones.router import router as notificaciones_router
 
 app = FastAPI(
     title="ServeTrack API",
@@ -47,7 +48,7 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Exception, unhandled_error_handler)
 
 # Routers /api/v1
-for r in [auth_router, torneos_router, equipos_router, atletas_router, partidos_router, estadisticas_router, rankings_router, reportes_router, config_router, admin_perfiles_router]:
+for r in [auth_router, torneos_router, equipos_router, atletas_router, partidos_router, estadisticas_router, rankings_router, reportes_router, config_router, admin_perfiles_router, notificaciones_router]:
     app.include_router(r, prefix="/api/v1")
 app.include_router(equipo_op_router, prefix="/api/v1")
 app.include_router(public_router, prefix="/api/v1")

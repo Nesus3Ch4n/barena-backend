@@ -7,7 +7,7 @@ from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
 from app.partidos.models import Partido
 from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, list_mis_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -91,41 +91,6 @@ async def bracket_estado(categoria_id: str, user=Depends(get_current_user), db: 
         snap = None
     return {"success": True, "data": {"pendientes": pend, "con_resultado": hechas, "congelada": snap}, "error": None}
 
-@categoria_fixture_router.post("/_migracion015", response_model=dict)
-async def _migracion015_tmp(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
-    # TEMPORAL-ELIMINAR: inspecciona y adapta notificaciones + torneo_jueces (DDL fijo, sin inputs)
-    from sqlalchemy import text as _text
-    await db.execute(_text("""CREATE TABLE IF NOT EXISTS torneo_jueces (
-        torneo_id UUID NOT NULL REFERENCES torneos(id) ON DELETE CASCADE,
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (torneo_id, user_id))"""))
-    cols = list((await db.execute(_text("SELECT column_name FROM information_schema.columns WHERE table_name='notificaciones' ORDER BY ordinal_position"))).scalars().all())
-    nrows = None
-    if "user_id" not in cols:
-        # tabla legacy con otra forma: renombrar y crear la correcta (preserva datos viejos)
-        await db.execute(_text("ALTER TABLE notificaciones RENAME TO notificaciones_legacy"))
-        await db.execute(_text("""CREATE TABLE notificaciones (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            tipo VARCHAR(30) NOT NULL DEFAULT 'general', titulo VARCHAR(120) NOT NULL, cuerpo TEXT NULL,
-            partido_id UUID NULL REFERENCES partidos(id) ON DELETE CASCADE,
-            leida BOOLEAN NOT NULL DEFAULT FALSE, creada_en TIMESTAMPTZ NOT NULL DEFAULT now())"""))
-        await db.execute(_text("CREATE INDEX IF NOT EXISTS ix_notif_user ON notificaciones (user_id, creada_en DESC)"))
-        await db.flush()
-        cols = list((await db.execute(_text("SELECT column_name FROM information_schema.columns WHERE table_name='notificaciones' ORDER BY ordinal_position"))).scalars().all())
-    else:
-        for coldef in ["tipo VARCHAR(30) NOT NULL DEFAULT 'general'", "titulo VARCHAR(120) NOT NULL DEFAULT ''",
-                       "cuerpo TEXT NULL", "leida BOOLEAN NOT NULL DEFAULT FALSE",
-                       "creada_en TIMESTAMPTZ NOT NULL DEFAULT now()", "partido_id UUID NULL"]:
-            cname = coldef.split()[0]
-            if cname not in cols:
-                await db.execute(_text(f"ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS {coldef}"))
-        await db.execute(_text("CREATE INDEX IF NOT EXISTS ix_notif_user ON notificaciones (user_id, creada_en DESC)"))
-        await db.flush()
-        cols = list((await db.execute(_text("SELECT column_name FROM information_schema.columns WHERE table_name='notificaciones' ORDER BY ordinal_position"))).scalars().all())
-    tj = (await db.execute(_text("SELECT to_regclass('public.torneo_jueces')"))).scalar()
-    return {"success": True, "data": {"torneo_jueces": str(tj), "columnas_notif": cols}, "error": None}
-
 @categoria_fixture_router.post("/sincronizar", response_model=dict)
 async def sincronizar(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
@@ -144,7 +109,7 @@ async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None,
     sets_por_partido = defaultdict(list)
     for s in res.scalars().all():
         sets_por_partido[s.partido_id].append({"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id})
-    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id, "sets": sets_por_partido.get(p.id, [])} for p in partidos]
+    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "arbitro_id": p.arbitro_id, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id, "sets": sets_por_partido.get(p.id, [])} for p in partidos]
     return {"success": True, "data": data, "error": None}
 
 @router.patch("/{partido_id}/programar", response_model=dict)
@@ -171,6 +136,10 @@ async def resultado(partido_id: str, body: ResultadoIn, request: Request, user=D
         res_e = await db.execute(select(Partido.id).where(Partido.categoria_id == partido.categoria_id, Partido.fase != "grupos").limit(1))
         bracket_generado = res_e.scalar_one_or_none() is not None
     return {"success": True, "data": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "bracket_generado": bracket_generado}, "error": None}
+
+@router.get("/juez/mis-partidos", response_model=dict)
+async def mis_partidos(user=Depends(require_roles("juez_anotador", "organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    return {"success": True, "data": await list_mis_partidos(db, user.id), "error": None}
 
 @router.get("/{partido_id}", response_model=dict)
 async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
