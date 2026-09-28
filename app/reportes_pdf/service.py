@@ -213,9 +213,12 @@ async def _pdf_evento(db: AsyncSession, tipo: str, torneo_id: str):
             cuerpo.append(Paragraph(f"{rama.tipo} · {cat.nombre}", EST_H2))
             rg = await list_rankings_general(db, cat.id)
             if rg:
+                from app.equipos.models import Equipo
+                res_eq = await db.execute(select(Equipo).where(Equipo.id.in_([r.equipo_id for r in rg])))
+                _noms = {e.id: e.nombre for e in res_eq.scalars().all()}
                 filas = [["Pos", "Dupla", "PJ", "PG", "Pts"]]
                 for r in rg[:16]:
-                    filas.append([r.posicion, (r.equipo_nombre or "")[:34], r.pj, r.pg, r.pts])
+                    filas.append([r.posicion, (_noms.get(r.equipo_id, "Equipo"))[:34], r.pj, r.pg, r.pts])
                 cuerpo.append(_tabla(filas, [40, 220, 40, 40, 40]))
             else:
                 cuerpo.append(Paragraph("Sin clasificación todavía.", EST_TXT))
