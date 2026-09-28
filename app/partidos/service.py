@@ -1219,6 +1219,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
         "tiempos": tiempos,
         "tiempos_duracion_seg": {**TIEMPOS_DURACION_SEG, "tiempo_muerto": _rg["tiempo_duracion_seg"]},
         "reglas": _rg,
+        "observaciones": getattr(partido, "observaciones", None),
         "tarjetas": tarjetas,
         "sanciones_detalle": sanciones_detalle,
         "sanciones_jugador": sanciones_jugador,

@@ -2,13 +2,19 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
-from app.atletas.service import list_atletas_equipo, get_atleta, get_atleta_por_codigo, mis_duplas
+from app.atletas.service import list_atletas_equipo, get_atleta, get_atleta_por_codigo, mis_duplas, buscar_atletas
 
 router = APIRouter(prefix="/atletas", tags=["atletas"])
 
 @router.get("/mios", response_model=dict)
 async def mias(user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     return {"success": True, "data": await mis_duplas(db, user.id), "error": None}
+
+@router.get("/buscar", response_model=dict)
+async def buscar(q: str = "", user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not q.strip() or len(q.strip()) < 2:
+        return {"success": True, "data": [], "error": None}
+    return {"success": True, "data": await buscar_atletas(db, q), "error": None}
 
 @router.get("/por-codigo/{codigo}", response_model=dict)
 async def por_codigo(codigo: str, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

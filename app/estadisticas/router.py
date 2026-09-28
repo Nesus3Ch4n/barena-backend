@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.shared.database import get_db
 from app.shared.security import get_current_user, require_roles
 from app.estadisticas.schemas import EstadisticaIn
-from app.estadisticas.service import upsert_estadistica, list_estadisticas, get_atleta_stats
+from app.estadisticas.service import upsert_estadistica, list_estadisticas, get_atleta_stats, get_atleta_resumen, get_juez_resumen
 from app.partidos.service import verify_juez_partido
 
 router = APIRouter(prefix="/partidos/{partido_id}/estadisticas", tags=["estadisticas"])
@@ -24,4 +24,14 @@ async def listar(partido_id: str, user=Depends(get_current_user), db: AsyncSessi
 @atleta_router.get("/{atleta_id}/stats", response_model=dict)
 async def stats_atleta(atleta_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     data = await get_atleta_stats(db, atleta_id)
+    return {"success": True, "data": data, "error": None}
+
+@atleta_router.get("/{atleta_id}/resumen", response_model=dict)
+async def resumen_atleta(atleta_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    data = await get_atleta_resumen(db, atleta_id)
+    return {"success": True, "data": data, "error": None}
+
+@atleta_router.get("/juez/{user_id}/resumen", response_model=dict)
+async def resumen_juez(user_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    data = await get_juez_resumen(db, user_id)
     return {"success": True, "data": data, "error": None}

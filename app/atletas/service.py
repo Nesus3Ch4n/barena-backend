@@ -15,6 +15,17 @@ async def get_atleta(db: AsyncSession, atleta_id: str):
         raise NotFound("ATLETA_NOT_FOUND", "Atleta no existe", {"id": atleta_id})
     return atleta
 
+async def buscar_atletas(db: AsyncSession, q: str):
+    from sqlalchemy import or_ as _or
+    like = f"%{q.strip()}%"
+    res = await db.execute(select(Atleta).where(
+        _or(Atleta.nombre_completo.ilike(like), Atleta.codigo_reclamo.ilike(like))).limit(20))
+    out = []
+    for a in res.scalars().all():
+        out.append({"id": a.id, "nombre_completo": a.nombre_completo,
+                    "codigo_reclamo": a.codigo_reclamo, "equipo_id": a.equipo_id})
+    return out
+
 async def mis_duplas(db: AsyncSession, user_id: str):
     """Filas Atleta vinculadas a la cuenta, con dupla/torneo y partidos en vivo de cada una."""
     from app.equipos.models import Equipo

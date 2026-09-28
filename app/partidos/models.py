@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import String, Integer, Boolean, ForeignKey, DateTime, func, Index
+from sqlalchemy import String, Integer, Boolean, ForeignKey, DateTime, func, Index, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from app.shared.database import Base
 
@@ -24,6 +24,7 @@ class Partido(Base):
     orden_en_round: Mapped[int] = mapped_column(Integer, nullable=True)
     partido_siguiente_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("partidos.id", ondelete="SET NULL"), nullable=True)
     arbitro_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    observaciones: Mapped[str] = mapped_column(Text, nullable=True)
     sorteo_ganador_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=True)
     saque_equipo_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("equipos.id"), nullable=True)
     saque_atleta_id: Mapped[str] = mapped_column(String(36), nullable=True)

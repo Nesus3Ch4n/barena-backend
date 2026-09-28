@@ -1,5 +1,6 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.shared.database import get_db
@@ -144,7 +145,7 @@ async def mis_partidos(user=Depends(require_roles("juez_anotador", "organizador"
 @router.get("/{partido_id}", response_model=dict)
 async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     partido, sets = await get_partido(db, partido_id)
-    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha, "tarjetas_amarillas_local": partido.tarjetas_amarillas_local, "tarjetas_rojas_local": partido.tarjetas_rojas_local, "tarjetas_amarillas_visit": partido.tarjetas_amarillas_visit, "tarjetas_rojas_visit": partido.tarjetas_rojas_visit}, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
+    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha, "observaciones": getattr(partido, "observaciones", None), "tarjetas_amarillas_local": partido.tarjetas_amarillas_local, "tarjetas_rojas_local": partido.tarjetas_rojas_local, "tarjetas_amarillas_visit": partido.tarjetas_amarillas_visit, "tarjetas_rojas_visit": partido.tarjetas_rojas_visit}, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
 
 @router.get("/{partido_id}/qr", response_model=dict)
 async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -179,6 +180,20 @@ async def iniciar(partido_id: str, body: IniciarIn, request: Request, user=Depen
 async def finalizar(partido_id: str, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
     await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
     return {"success": True, "data": await finalizar_partido(db, partido_id), "error": None}
+
+class ObservacionesIn(BaseModel):
+    observaciones: str = Field(max_length=2000)
+
+@router.patch("/{partido_id}/observaciones", response_model=dict)
+async def guardar_observaciones(partido_id: str, body: ObservacionesIn, request: Request, user=Depends(require_roles(*LIVE_ROLES)), db: AsyncSession = Depends(get_db)):
+    await verify_juez_partido(db, partido_id, user.id, getattr(request.state, "roles", []))
+    res = await db.execute(select(Partido).where(Partido.id == partido_id))
+    partido = res.scalar_one_or_none()
+    if not partido:
+        raise NotFound("PARTIDO_NOT_FOUND", "Partido no existe", {"id": partido_id})
+    partido.observaciones = body.observaciones.strip() or None
+    await db.flush()
+    return {"success": True, "data": {"id": partido.id, "observaciones": partido.observaciones}, "error": None}
 
 @router.patch("/{partido_id}", response_model=dict)
 async def actualizar(partido_id: str, body: PartidoUpdate, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
