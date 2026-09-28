@@ -1,20 +1,22 @@
 """TEMPORAL mig017: columna rol en torneo_jueces + indice unico por rol.
 ELIMINAR este archivo tras aplicar en produccion.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.database import get_db
 from app.shared.security import get_current_user
-from app.admin.router import require_super_admin
+from app.shared.errors import Forbidden
 
 router = APIRouter(prefix="/tmp", tags=["tmp"])
 
 
 @router.post("/mig017", response_model=dict)
-async def mig017(user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await require_super_admin(user, db)
+async def mig017(request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    roles = list(getattr(request.state, "roles", []) or [])
+    if "super_admin" not in roles and "organizador" not in roles:
+        raise Forbidden("Solo organizador/super_admin (temporal mig017)")
     await db.execute(text("ALTER TABLE torneo_jueces ADD COLUMN IF NOT EXISTS rol VARCHAR(24)"))
     await db.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_torneo_jueces_rol "
