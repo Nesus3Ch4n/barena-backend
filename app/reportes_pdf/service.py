@@ -392,6 +392,14 @@ async def _datos_voley(db: AsyncSession, partido, sets: list) -> dict:
                         "inicio": ini_t, "fin": fin_t})
 
     sets_pts = {s.numero_set: (s.pts_local, s.pts_visitante) for s in sets}
+    if not bloques and sets:
+        # Sin bitácora en vivo (resultado cargado manual): un bloque por set
+        # archivado con marcador real y secciones vacías, como la referencia.
+        for s in sets:
+            bloques.append({"num": s.numero_set, "local": s.pts_local,
+                            "visit": s.pts_visitante, "rallys": [],
+                            "tiempos": [], "sanciones": [],
+                            "inicio": None, "fin": None})
     tot_l = sum(v[0] for v in sets_pts.values())
     tot_v = sum(v[1] for v in sets_pts.values())
     gan_l = sum(1 for s in sets if s.ganador_id and s.ganador_id == partido.equipo_local_id)
@@ -607,7 +615,7 @@ def _v_bloque_set(c, d, b, y_top):
         for s in b["sanciones"]:
             eq = d["eq1"] if s["lado"] == "local" else (d["eq2"] if s["lado"] == "visitante" else "—")
             _v_celda(c, 32.6, y, 170, 14, s["jugador"], 9)
-            _v_celda(c, 202.6, y, 110, 14, eq[:16], 9)
+            _v_celda(c, 202.6, y, 110, 14, eq[:40], 9)
             _v_celda(c, 312.6, y, 140, 14, s["tipo"], 9)
             y += 14
     else:
@@ -620,7 +628,7 @@ def _v_bloque_set(c, d, b, y_top):
     y += 14
     for lado, nom, marca in (("local", d["eq1"], _V_ROJO), ("visitante", d["eq2"], _V_NEGRO)):
         tms = [t for t in b["tiempos"] if t["lado"] == lado]
-        txt = f"{nom[:18]}: " + ("  ".join(f"TM({t['score']})" for t in tms) if tms else "—")
+        txt = f"{nom[:40]}: " + ("  ".join(f"TM({t['score']})" for t in tms) if tms else "—")
         _v_celda(c, 32.6 if lado == "local" else 417.6, y, 385, 16, txt, 9, centro=False)
     y += 16
     y += 8
