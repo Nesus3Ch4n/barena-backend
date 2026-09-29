@@ -243,51 +243,454 @@ async def _pdf_evento(db: AsyncSession, tipo: str, torneo_id: str):
 
 
 async def _pdf_partido(db: AsyncSession, partido_id: str, es_staff: bool):
-    from app.partidos.service import get_partido, live_snapshot
-    from app.equipos.models import Equipo
+    from app.partidos.service import get_partido
     partido, sets = await get_partido(db, partido_id)
+    datos = await _datos_voley(db, partido, sets)
+    buf = io.BytesIO()
+    _construir_pdf_voley(buf, datos)
+    return f"reporte_partido_{str(partido_id)[:8]}.pdf", buf.getvalue()
+
+
+# ============================================================
+# Reporte de partido estilo hoja oficial ("Volleyball Referee")
+# A4 horizontal (841.9 x 595), 3 bloques: portada+set1 / sets / resumen.
+# Usa UNICAMENTE datos reales: sets_partido + bitacora partido_eventos.
+# ============================================================
+_V_PW, _V_PH = 841.92, 594.96
+_V_ROJO = colors.HexColor("#bc0018")
+_V_NEGRO = colors.HexColor("#1f1f1f")
+_V_GRIS = colors.HexColor("#ecebec")
+_V_LINEA = colors.HexColor("#1f1f1f")
+
+_DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def _v_y(y: float) -> float:
+    return _V_PH - y
+
+
+def _v_fecha(dt) -> str:
+    if not dt:
+        return "—"
+    return f"{_DIAS[dt.weekday()]}, {dt.day} de {_MESES[dt.month - 1]} de {dt.year}"
+
+
+def _v_hora(dt) -> str:
+    if not dt:
+        return "—"
+    h = dt.hour % 12 or 12
+    suf = "a.m." if dt.hour < 12 else "p.m."
+    return f"{h}:{dt.minute:02d} {suf}"
+
+
+def _v_dur(a, b) -> str:
+    if not a or not b:
+        return "—"
+    m = max(0, int(round((b - a).total_seconds() / 60)))
+    return f"{m} min"
+
+
+def _v_apellido(nombre: str) -> str:
+    parts = (nombre or "").strip().split()
+    return parts[-1] if parts else "—"
+
+
+async def _datos_voley(db: AsyncSession, partido, sets: list) -> dict:
+    from app.equipos.models import Equipo
+    from app.atletas.models import Atleta
+    from app.partidos.models import PartidoEvento
+    from app.torneos.models import Categoria, Rama, Torneo, TorneoJuez
+    from app.auth.models import User, Profile
+
     nombres = {}
     for eid in (partido.equipo_local_id, partido.equipo_visit_id):
         if eid:
             res = await db.execute(select(Equipo).where(Equipo.id == eid))
             eq = res.scalar_one_or_none()
             nombres[eid] = eq.nombre if eq else "Por definir"
-    cuerpo: list = []
-    _portada(cuerpo, "REPORTE DE PARTIDO",
-             f"{nombres.get(partido.equipo_local_id, '?')} vs {nombres.get(partido.equipo_visit_id, '?')}",
-             [f"Fase: {partido.fase} · Cancha: {partido.cancha or '—'} · Estado: {partido.estado}",
-              f"Fecha: {partido.fecha_hora.isoformat()[:16] if partido.fecha_hora else '—'}"])
-    cuerpo.append(Paragraph("Sets", EST_H2))
-    if not sets:
-        cuerpo.append(Paragraph("Sin sets registrados.", EST_TXT))
-    else:
-        filas = [["Set", "Local", "Visita", "Ganador"]]
-        for s in sets:
-            g = nombres.get(s.ganador_id, "—") if s.ganador_id else "—"
-            filas.append([s.numero_set, s.pts_local, s.pts_visitante, (g or "")[:28]])
-        cuerpo.append(_tabla(filas, [50, 80, 80, 230]))
+
+    ats: dict = {}
+    if partido.equipo_local_id or partido.equipo_visit_id:
+        res = await db.execute(select(Atleta).where(Atleta.equipo_id.in_(
+            [e for e in (partido.equipo_local_id, partido.equipo_visit_id) if e])).order_by(Atleta.nombre_completo))
+        for at in res.scalars().all():
+            ats.setdefault(at.equipo_id, []).append(
+                {"id": at.id, "nombre": at.nombre_completo, "posicion": at.posicion})
+
+    cat_nom, tor_nom = "—", "—"
+    res = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+    cat = res.scalar_one_or_none()
+    if cat:
+        cat_nom = cat.nombre or "—"
+        res = await db.execute(select(Rama).where(Rama.id == cat.rama_id))
+        rama = res.scalar_one_or_none()
+        if rama:
+            res = await db.execute(select(Torneo).where(Torneo.id == rama.torneo_id))
+            tor = res.scalar_one_or_none()
+            if tor:
+                tor_nom = tor.nombre or "—"
+
+    res = await db.execute(select(PartidoEvento).where(
+        PartidoEvento.partido_id == partido.id).order_by(PartidoEvento.seq))
+    evs = [e for e in res.scalars().all() if not e.revocado]
+
+    # Ventanas por set: todo lo ocurrido hasta cada 'set_ganado'
+    ventanas: list = []
+    ini = 0
+    for e in evs:
+        if e.tipo == "set_ganado":
+            ventanas.append([x for x in evs if ini < x.seq <= e.seq])
+            ini = e.seq
+    resto = [x for x in evs if x.seq > ini and x.tipo in (
+        "punto", "tiempo_muerto", "tiempo_receso", "tiempo_medico",
+        "tarjeta_amarilla", "tarjeta_roja", "sancion", "descalificacion")]
+    if resto:
+        ventanas.append([x for x in evs if x.seq > ini])
+
+    atl_nom = {}
+    for lst in ats.values():
+        for a in lst:
+            atl_nom[a["id"]] = a["nombre"]
+
+    bloques = []
+    for i, win in enumerate(ventanas):
+        num = i + 1
+        arch = next((s for s in sets if s.numero_set == num), None)
+        rallys = [x.lado for x in win if x.tipo == "punto" and x.lado in ("local", "visitante")]
+        sl = sum(1 for l in rallys if l == "local")
+        sv = sum(1 for l in rallys if l == "visitante")
+        if arch:
+            sl, sv = arch.pts_local, arch.pts_visitante
+        # tiempos con marcador al momento del cobro
+        tiempos = []
+        for x in win:
+            if x.tipo in ("tiempo_muerto", "tiempo_receso", "tiempo_medico") and x.lado in ("local", "visitante"):
+                a = sum(1 for p in win if p.tipo == "punto" and p.seq < x.seq and p.lado == "local")
+                b = sum(1 for p in win if p.tipo == "punto" and p.seq < x.seq and p.lado == "visitante")
+                tiempos.append({"lado": x.lado, "tipo": x.tipo, "score": f"{a}-{b}",
+                                "hora": x.creado_at})
+        sanciones = []
+        for x in win:
+            if x.tipo in ("tarjeta_amarilla", "tarjeta_roja", "sancion", "descalificacion"):
+                if x.tipo == "tarjeta_amarilla":
+                    lab = "Amarilla"
+                elif x.tipo == "tarjeta_roja":
+                    lab = "Roja"
+                elif x.tipo == "descalificacion":
+                    lab = "Descalificación"
+                else:
+                    lab = str((x.extra or {}).get("tipo", "sancion")).capitalize()
+                jug = _v_apellido(atl_nom.get(x.atleta_id or "", "")) if x.atleta_id else "—"
+                sanciones.append({"jugador": jug, "lado": x.lado or "",
+                                  "tipo": lab, "razon": x.razon or ""})
+        ini_t = min((x.creado_at for x in win if x.creado_at), default=None)
+        fin_t = max((x.creado_at for x in win if x.creado_at), default=None)
+        bloques.append({"num": num, "local": sl, "visit": sv, "rallys": rallys,
+                        "tiempos": tiempos, "sanciones": sanciones,
+                        "inicio": ini_t, "fin": fin_t})
+
+    sets_pts = {s.numero_set: (s.pts_local, s.pts_visitante) for s in sets}
+    tot_l = sum(v[0] for v in sets_pts.values())
+    tot_v = sum(v[1] for v in sets_pts.values())
+    gan_l = sum(1 for s in sets if s.ganador_id and s.ganador_id == partido.equipo_local_id)
+    gan_v = sum(1 for s in sets if s.ganador_id and s.ganador_id == partido.equipo_visit_id)
+
+    async def _nombre(uid):
+        if not uid:
+            return ""
+        r1 = await db.execute(select(Profile).where(Profile.id == uid))
+        p = r1.scalar_one_or_none()
+        return (p.nombre_completo if p and p.nombre_completo else "") or ""
+
+    oficiales = {"juez2": "", "anotador": ""}
     try:
-        snap = await live_snapshot(db, partido_id)
-        cuerpo.append(Paragraph("Desarrollo", EST_H2))
-        cuerpo.append(Paragraph(
-            f"Marcador actual: {snap['score']['local']}-{snap['score']['visitante']} · Set {snap['current_set']}", EST_TXT))
-        ind = snap.get("individuales", {})
-        if ind:
-            filas = [["Atleta", "ACE", "ATQ", "BLQ", "DEF", "ERR"]]
-            for aid, v in ind.items():
-                nm = (snap.get("atletas", {}).get(aid) or {}).get("nombre_completo", "")[:26]
-                filas.append([nm, v.get("saque_directo", 0), v.get("ataque", 0), v.get("bloqueo", 0),
-                              v.get("defensa", 0), (v.get("error_saque", 0) + v.get("error_ataque", 0))])
-            cuerpo.append(_tabla(filas, [170, 45, 45, 45, 45, 45]))
-        if snap.get("observaciones"):
-            cuerpo.append(Paragraph("Observaciones del juez", EST_H2))
-            cuerpo.append(Paragraph(snap["observaciones"], EST_TXT))
+        rj = await db.execute(select(TorneoJuez, Profile).join(
+            Profile, Profile.id == TorneoJuez.user_id))
+        for tj, pf in rj.all():
+            rol = getattr(tj, "rol", None)
+            if rol in oficiales and not oficiales[rol]:
+                oficiales[rol] = pf.nombre_completo if pf else ""
     except Exception:
         pass
-    obs = getattr(partido, "observaciones", None)
-    if obs:
-        cuerpo.append(Paragraph("Observaciones", EST_H2))
-        cuerpo.append(Paragraph(obs, EST_TXT))
-    buf, doc = _doc("Reporte partido")
-    doc.build(cuerpo)
-    return f"reporte_partido_{str(partido_id)[:8]}.pdf", buf.getvalue()
+    arb1 = await _nombre(partido.arbitro_id)
+
+    def _cap(eid):
+        lst = ats.get(eid or "", [])
+        cap = next((a for a in lst if (a["posicion"] or "").lower() == "capitan"), None)
+        return _v_apellido((cap or (lst[0] if lst else {})).get("nombre", "")) if lst else "—"
+
+    ini_p = getattr(partido, "iniciado_en", None)
+    fin_p = getattr(partido, "finalizado_en", None)
+    h_ini = _v_hora(ini_p or partido.fecha_hora)
+    h_fin = _v_hora(fin_p or partido.fecha_hora)
+    return {
+        "titulo": f"{tor_nom} / {cat_nom}",
+        "fecha": _v_fecha(ini_p or partido.fecha_hora),
+        "rango": (h_ini, h_fin),
+        "dur": _v_dur(ini_p, fin_p),
+        "eq1": nombres.get(partido.equipo_local_id, "Por definir"),
+        "eq2": nombres.get(partido.equipo_visit_id, "Por definir"),
+        "sets_pts": sets_pts, "tot_l": tot_l, "tot_v": tot_v,
+        "gan_l": gan_l, "gan_v": gan_v,
+        "jug1": [{"num": i + 1, "nombre": _v_apellido(a["nombre"])} for i, a in enumerate(ats.get(partido.equipo_local_id or "", [])[:4])],
+        "jug2": [{"num": i + 1, "nombre": _v_apellido(a["nombre"])} for i, a in enumerate(ats.get(partido.equipo_visit_id or "", [])[:4])],
+        "bloques": bloques,
+        "obs": getattr(partido, "observaciones", None) or "",
+        "arb1": arb1, "arb2": oficiales["juez2"], "anot": oficiales["anotador"],
+        "cap1": _cap(partido.equipo_local_id), "cap2": _cap(partido.equipo_visit_id),
+        "fase": partido.fase, "cancha": partido.cancha or "—", "estado": partido.estado,
+    }
+
+
+def _v_flecha(c, x, ymid, w=14):
+    """Flecha vectorial -> (las fuentes base no traen el glifo)."""
+    c.setStrokeColor(_V_NEGRO)
+    c.setLineWidth(0.9)
+    c.line(x, ymid, x + w, ymid)
+    c.line(x + w, ymid, x + w - 4, ymid + 2.2)
+    c.line(x + w, ymid, x + w - 4, ymid - 2.2)
+
+
+def _v_rango(c, cx, y, h, izq, der, tam=9, negrita=False):
+    """Texto centrado 'izq -> der' con flecha dibujada."""
+    f = "Helvetica-Bold" if negrita else "Helvetica"
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    w1, w2 = stringWidth(izq, f, tam), stringWidth(der, f, tam)
+    aw, gap = 14, 5
+    x0 = cx - (w1 + gap + aw + gap + w2) / 2
+    c.setFillColor(_V_NEGRO)
+    c.setFont(f, tam)
+    base = _v_y(y + h) + (h - tam) / 2 + 1
+    c.drawString(x0, base, izq)
+    _v_flecha(c, x0 + w1 + gap, base + tam * 0.32, aw)
+    c.drawString(x0 + w1 + gap + aw + gap, base, der)
+
+
+def _v_rango_set(c, x, y, w, h, izq, der, dur):
+    """Banda de set: 'H1 -> H2  DUR' centrado como grupo."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    f, tam = "Helvetica", 9
+    w1, w2, wd = stringWidth(izq, f, tam), stringWidth(der, f, tam), stringWidth(dur, f, tam)
+    aw, gap = 14, 5
+    total = w1 + gap + aw + gap + w2 + gap * 2 + wd
+    x0 = x + (w - total) / 2
+    base = _v_y(y + h) + (h - tam) / 2 + 1
+    c.setFillColor(_V_NEGRO)
+    c.setFont(f, tam)
+    c.drawString(x0, base, izq)
+    _v_flecha(c, x0 + w1 + gap, base + tam * 0.32, aw)
+    c.drawString(x0 + w1 + gap + aw + gap, base, der)
+    c.drawString(x0 + w1 + gap + aw + gap + w2 + gap * 2, base, dur)
+
+
+def _v_marco(c, x, y, w, h):
+    for dx in (0, 1, 2.5):
+        c.setStrokeColor(_V_LINEA)
+        c.setLineWidth(0.75)
+        c.rect(x + dx, _v_y(y + h) + dx, w - 2 * dx, h - 2 * dx, stroke=1, fill=0)
+
+
+def _v_celda(c, x, y, w, h, texto="", tam=9, negrita=False, color=_V_NEGRO,
+             fondo=None, centro=True, borde=True):
+    yy = _v_y(y + h)
+    if fondo is not None:
+        c.setFillColor(fondo)
+        c.rect(x, yy, w, h, stroke=0, fill=1)
+    if borde:
+        c.setStrokeColor(_V_LINEA)
+        c.setLineWidth(0.75)
+        c.rect(x, yy, w, h, stroke=1, fill=0)
+    if texto:
+        c.setFillColor(color)
+        c.setFont("Helvetica-Bold" if negrita else "Helvetica", tam)
+        if centro:
+            c.drawCentredString(x + w / 2, yy + (h - tam) / 2 + 1, str(texto))
+        else:
+            c.drawString(x + 4, yy + (h - tam) / 2 + 1, str(texto))
+
+
+def _v_pie(c):
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Oblique", 8)
+    c.drawString(696, _v_y(574.6) - 6, "Powered by Volleyball Referee")
+
+
+def _v_encabezado(c, d):
+    _v_marco(c, 25.4, 3.6, 791.6, 67)
+    _v_celda(c, 32.6, 10.9, 311.3, 18, d["titulo"], 10, True, centro=False)
+    _v_celda(c, 343.1, 10.9, 156, 18, d["fecha"], 9)
+    _v_celda(c, 498.4, 10.9, 156, 18, "", 9)
+    _v_rango(c, 498.4 + 78, 10.9, 18, d["rango"][0], d["rango"][1], 9)
+    _v_celda(c, 653.6, 10.9, 63, 18, d["dur"], 9, True)
+    filas = [(d["eq1"], d["sets_pts"], d["tot_l"], d["gan_l"], _V_ROJO),
+             (d["eq2"], d["sets_pts"], d["tot_v"], d["gan_v"], _V_NEGRO)]
+    for i, (nom, sp, tot, gan, marca) in enumerate(filas):
+        y = 29.6 + i * 16.5
+        _v_celda(c, 32.6, y, 311.3, 15.8, nom, 10, True, centro=False)
+        c.setFillColor(marca)
+        c.rect(336.5, _v_y(y + 15.8) + 5.5, 5, 5, stroke=0, fill=1)
+        lado = 0 if i == 0 else 1
+        s1 = sp.get(1, (None, None))[lado]
+        s2 = sp.get(2, (None, None))[lado]
+        s3 = sp.get(3, (None, None))[lado]
+        vals = [s1, s2, s3, tot if tot else "", gan if (gan or tot) else ""]
+        xs = [343.1, 382.9, 422.7, 462.5, 502.3]
+        for j, v in enumerate(vals):
+            _v_celda(c, xs[j], y, 39.8, 15.8, "" if v is None else v, 10, True)
+
+
+def _v_jugadores(c, d):
+    _v_marco(c, 25.4, 73.4, 791.6, 48.3)
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(81.5) - 7, "Jugadores")
+    for k, (lst, xs) in enumerate((("jug1", [34.5, 207]), ("jug2", [465.7, 638.2]))):
+        for j, bx in enumerate(xs):
+            if j >= len(d[lst]):
+                continue
+            jg = d[lst][j]
+            _v_celda(c, bx, 96.8, 21, 15, str(jg["num"]), 9, True,
+                     colors.white if k else _V_NEGRO,
+                     _V_NEGRO if k else None)
+            c.setFillColor(_V_NEGRO)
+            c.setFont("Helvetica", 9)
+            c.drawString(bx + 25, _v_y(96.8 + 15) + 3, jg["nombre"])
+
+
+def _v_rejilla(c, rallys, x, y, por_linea=32):
+    """Rejilla serpentina: cada rally una celdilla coloreada por equipo ganador."""
+    cw, chh, pitch, desf = 21, 15, 24, 7.5
+    h_linea = chh + desf + 3
+    yy = y
+    for ini in range(0, len(rallys) or 1, por_linea):
+        trozo = rallys[ini:ini + por_linea] if rallys else []
+        for k, lado in enumerate(trozo):
+            cx = x + k * pitch
+            cy = yy + (desf if k % 2 else 0)
+            fill = _V_ROJO if lado == "local" else _V_NEGRO
+            c.setFillColor(fill)
+            c.rect(cx, _v_y(cy + chh), cw, chh, stroke=0, fill=1)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 8)
+            c.drawCentredString(cx + cw / 2, _v_y(cy + chh) + 4, str(ini + k + 1))
+        yy += h_linea
+    return yy - y
+
+
+def _v_bloque_set(c, d, b, y_top):
+    y = y_top
+    _v_celda(c, 32.6, y + 7, 99.8, 31.3, f"Set {b['num']}", 14, True, colors.white, _V_NEGRO)
+    _v_celda(c, 131.6, y + 7, 33, 15.3, b["local"], 20, True)
+    _v_celda(c, 131.6, y + 23, 33, 15.3, b["visit"], 20, True)
+    _v_celda(c, 214.9, y + 7, 188.2, 18, "", 9)
+    if b["inicio"] is None:
+        c.setFillColor(_V_NEGRO)
+        c.setFont("Helvetica", 9)
+        c.drawCentredString(214.9 + 94.1, _v_y(y + 25) + 5, "Sin registro de horario")
+    else:
+        dur = _v_dur(b["inicio"], b["fin"])
+        _v_rango_set(c, 214.9, y + 7, 188.2, 18, _v_hora(b["inicio"]), _v_hora(b["fin"]), dur)
+    y += 46
+    # marco del bloque (se dibuja al final con la altura real)
+    y0_marco = y_top - 7
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(y) - 10, "Sanciones")
+    y += 14
+    if b["sanciones"]:
+        _v_celda(c, 32.6, y, 170, 14, "Jugador", 8, True, colors.white, _V_NEGRO)
+        _v_celda(c, 202.6, y, 110, 14, "Equipo", 8, True, colors.white, _V_NEGRO)
+        _v_celda(c, 312.6, y, 140, 14, "Tipo", 8, True, colors.white, _V_NEGRO)
+        y += 14
+        for s in b["sanciones"]:
+            eq = d["eq1"] if s["lado"] == "local" else (d["eq2"] if s["lado"] == "visitante" else "—")
+            _v_celda(c, 32.6, y, 170, 14, s["jugador"], 9)
+            _v_celda(c, 202.6, y, 110, 14, eq[:16], 9)
+            _v_celda(c, 312.6, y, 140, 14, s["tipo"], 9)
+            y += 14
+    else:
+        _v_celda(c, 32.6, y, 420, 15, "", 9)
+        y += 15
+    y += 8
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(y) - 10, "Tiempos muertos")
+    y += 14
+    for lado, nom, marca in (("local", d["eq1"], _V_ROJO), ("visitante", d["eq2"], _V_NEGRO)):
+        tms = [t for t in b["tiempos"] if t["lado"] == lado]
+        txt = f"{nom[:18]}: " + ("  ".join(f"TM({t['score']})" for t in tms) if tms else "—")
+        _v_celda(c, 32.6 if lado == "local" else 417.6, y, 385, 16, txt, 9, centro=False)
+    y += 16
+    y += 8
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(y) - 10, "Puntos")
+    y += 14
+    if b["rallys"]:
+        y += _v_rejilla(c, b["rallys"], 34.5, y)
+    else:
+        c.setFillColor(_V_NEGRO)
+        c.setFont("Helvetica", 9)
+        c.drawString(35.5, _v_y(y) - 10, "Sin puntos registrados.")
+        y += 14
+    _v_marco(c, 25.4, y0_marco, 791.6, (y - y0_marco) + 7)
+    return y + 7
+
+
+def _v_tarjeta_firma(c, x, y, w, etiqueta, nombre):
+    _v_celda(c, x, y, 64.5, 15.8, etiqueta, 9, True, centro=False)
+    _v_celda(c, x + 63.8, y, w - 63.8, 15.8, nombre or "", 9, centro=False)
+    c.setStrokeColor(_V_LINEA)
+    c.setLineWidth(0.75)
+    c.rect(x + 63.8, _v_y(y + 66.8) , w - 63.8, 50, stroke=1, fill=0)
+
+
+def _v_resumen(c, d):
+    _v_marco(c, 26.4, 73, 789.6, 68.6)
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(80) - 7, "Observaciones")
+    if d["obs"]:
+        c.setFont("Helvetica", 9)
+        c.drawString(36.3, _v_y(101.4) - 6, d["obs"][:160])
+    _v_marco(c, 26.4, 146.4, 789.6, 176.6)
+    c.setFillColor(_V_NEGRO)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(35.5, _v_y(153.5) - 7, "Firmas")
+    _v_tarjeta_firma(c, 32.6, 172.1, 222.8, "Árbitro 1", d["arb1"])
+    _v_tarjeta_firma(c, 310.1, 172.1, 222, "Árbitro 2", d["arb2"])
+    _v_tarjeta_firma(c, 586.9, 172.1, 222.7, "Anotador", d["anot"])
+    _v_tarjeta_firma(c, 32.6, 248.6, 222.8, "Capitán", d["cap1"])
+    _v_tarjeta_firma(c, 309.8, 248.6, 222.3, "Capitán", d["cap2"])
+
+
+def _construir_pdf_voley(buf, d):
+    from reportlab.pdfgen import canvas as _canvas
+    c = _canvas.Canvas(buf, pagesize=(_V_PW, _V_PH))
+    c.setTitle("Reporte de partido")
+    bloques = d["bloques"] or [{"num": 1, "local": d["sets_pts"].get(1, ("—", "—"))[0],
+                                "visit": d["sets_pts"].get(1, ("—", "—"))[1],
+                                "rallys": [], "tiempos": [], "sanciones": [],
+                                "inicio": None, "fin": None}]
+    # Pág 1: encabezado + jugadores + set 1
+    _v_encabezado(c, d)
+    _v_jugadores(c, d)
+    fin1 = _v_bloque_set(c, d, bloques[0], 124.3)
+    _v_pie(c)
+    c.showPage()
+    # Pág 2+: sets restantes (2 por página)
+    rest = bloques[1:]
+    for i in range(0, len(rest), 2):
+        yy = 7.7
+        for b in rest[i:i + 2]:
+            yy = _v_bloque_set(c, d, b, yy) + 5
+        _v_pie(c)
+        c.showPage()
+    # Resumen
+    _v_encabezado(c, d)
+    _v_resumen(c, d)
+    _v_pie(c)
+    c.showPage()
+    c.save()

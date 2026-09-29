@@ -67,4 +67,7 @@ class TorneoJuez(Base):
     __tablename__ = "torneo_jueces"
     torneo_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("torneos.id", ondelete="CASCADE"), primary_key=True)
     user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    # Rol de oficial dentro del torneo (juez1, juez2, anotador, asistente_anotador,
+    # linea1..linea4). NULL = juez vinculado legacy (opera partidos, sin rol de oficial).
+    rol: Mapped[str] = mapped_column(String(24), nullable=True)
     creado_en: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now())

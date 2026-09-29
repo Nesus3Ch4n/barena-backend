@@ -75,6 +75,11 @@ class TorneoCreate(BaseModel):
 
 class JuezVincularIn(BaseModel):
     email: str = Field(min_length=5, max_length=255)
+    rol: Optional[str] = Field(default=None, max_length=24)
+
+class JuezRolIn(BaseModel):
+    # Asigna el rol de oficial al juez vinculado (None = quitar el rol, queda vinculado legacy)
+    rol: Optional[str] = Field(default=None, max_length=24)
 
 class VisibilidadUpdate(BaseModel):
     fixture_visible: Optional[bool] = None

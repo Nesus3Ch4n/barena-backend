@@ -217,6 +217,16 @@ async def _torneo_para_jueces(db: AsyncSession, torneo_id: str, user_id: str, is
         raise AppError(409, "MIGRACION_PENDIENTE", "Aplica la migración 015 para gestionar jueces")
     return torneo
 
+ROLES_OFICIALES = ("juez1", "juez2", "anotador", "asistente_anotador",
+                   "linea1", "linea2", "linea3", "linea4")
+ROLES_ELEGIBLES_OFICIAL = ("juez_anotador", "organizador", "super_admin")
+
+
+def _validar_rol_oficial(rol: str | None) -> None:
+    if rol is not None and rol not in ROLES_OFICIALES:
+        raise AppError(400, "ROL_INVALIDO", f"Rol de oficial inválido: {rol}", {"valid": list(ROLES_OFICIALES)})
+
+
 async def listar_jueces(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool = False, is_org: bool = False):
     from app.torneos.models import TorneoJuez
     from app.auth.models import User, Profile
@@ -233,10 +243,11 @@ async def listar_jueces(db: AsyncSession, torneo_id: str, user_id: str, is_super
         p = res3.scalar_one_or_none()
         out.append({"user_id": tj.user_id, "email": u.email,
                     "nombre_completo": p.nombre_completo if p else None,
+                    "rol": getattr(tj, "rol", None),
                     "roles": await get_roles_for_user(db, tj.user_id)})
     return out
 
-async def vincular_juez(db: AsyncSession, torneo_id: str, email: str, user_id: str, is_super: bool, is_org: bool = False):
+async def vincular_juez(db: AsyncSession, torneo_id: str, email: str, user_id: str, is_super: bool, is_org: bool = False, rol: str | None = None):
     from app.torneos.models import TorneoJuez
     from app.auth.models import User
     from app.auth.service import get_roles_for_user
@@ -252,7 +263,74 @@ async def vincular_juez(db: AsyncSession, torneo_id: str, email: str, user_id: s
     if not res2.scalar_one_or_none():
         db.add(TorneoJuez(torneo_id=torneo_id, user_id=u.id))
         await db.flush()
+    if rol is not None:
+        await _aplicar_rol(db, torneo_id, u.id, rol)
     return {"user_id": u.id, "email": u.email, "vinculado": True}
+
+async def _aplicar_rol(db: AsyncSession, torneo_id: str, target_user_id: str, rol: str | None):
+    """Asigna (o limpia con None) el rol de oficial. Valida ocupación única por rol."""
+    from app.torneos.models import TorneoJuez
+    _validar_rol_oficial(rol)
+    res = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == torneo_id, TorneoJuez.user_id == target_user_id))
+    tj = res.scalar_one_or_none()
+    if not tj:
+        raise NotFound("JUEZ_NO_VINCULADO", "Ese juez no está vinculado", {"user_id": target_user_id})
+    if rol is not None:
+        res2 = await db.execute(select(TorneoJuez).where(
+            TorneoJuez.torneo_id == torneo_id, TorneoJuez.rol == rol,
+            TorneoJuez.user_id != target_user_id))
+        occ = res2.scalar_one_or_none()
+        if occ:
+            raise AppError(409, "ROL_OCUPADO", f"El rol {rol} ya está asignado a otro juez",
+                           {"rol": rol, "user_id": occ.user_id})
+    tj.rol = rol
+    await db.flush()
+    return tj
+
+async def asignar_rol_juez(db: AsyncSession, torneo_id: str, target_id: str, rol: str | None, user_id: str, is_super: bool, is_org: bool = False):
+    """Selecciona un perfil existente como oficial del torneo (lo vincula si hace falta).
+    rol=None quita el rol y deja la vinculación legacy intacta."""
+    from app.torneos.models import TorneoJuez
+    from app.auth.models import User
+    from app.auth.service import get_roles_for_user
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    res = await db.execute(select(User).where(User.id == target_id))
+    u = res.scalar_one_or_none()
+    if not u:
+        raise NotFound("USER_NOT_FOUND", "Usuario no existe", {"id": target_id})
+    roles = await get_roles_for_user(db, u.id)
+    if not any(r in roles for r in ROLES_ELEGIBLES_OFICIAL):
+        raise AppError(400, "NO_ES_JUEZ", "El usuario no tiene perfil de juez/organizador", {"id": target_id})
+    res2 = await db.execute(select(TorneoJuez).where(TorneoJuez.torneo_id == torneo_id, TorneoJuez.user_id == u.id))
+    if not res2.scalar_one_or_none():
+        db.add(TorneoJuez(torneo_id=torneo_id, user_id=u.id))
+        await db.flush()
+    await _aplicar_rol(db, torneo_id, u.id, rol)
+    return {"user_id": u.id, "email": u.email, "rol": rol, "vinculado": True}
+
+async def buscar_usuarios_jueces(db: AsyncSession, q: str):
+    """Busca perfiles existentes elegibles como oficial (por nombre, email o prefijo de ID)."""
+    from sqlalchemy import or_, String, cast
+    from app.auth.models import User, Profile
+    from app.auth.service import get_roles_for_user
+    q = (q or "").strip()
+    if len(q) < 2:
+        raise AppError(400, "QUERY_CORTA", "Escribe al menos 2 caracteres para buscar")
+    like = f"%{q}%"
+    res = await db.execute(
+        select(User, Profile)
+        .join(Profile, Profile.id == User.id)
+        .join(user_roles, user_roles.c.user_id == User.id)
+        .where(user_roles.c.role_id.in_(ROLES_ELEGIBLES_OFICIAL))
+        .where(or_(Profile.nombre_completo.ilike(like), User.email.ilike(like),
+                   cast(User.id, String).ilike(f"{q}%")))
+        .distinct().limit(20))
+    out = []
+    for u, p in res.all():
+        out.append({"user_id": u.id, "email": u.email,
+                    "nombre_completo": p.nombre_completo if p else None,
+                    "roles": await get_roles_for_user(db, u.id)})
+    return out
 
 async def desvincular_juez(db: AsyncSession, torneo_id: str, target_id: str, user_id: str, is_super: bool, is_org: bool = False):
     from app.torneos.models import TorneoJuez

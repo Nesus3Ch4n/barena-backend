@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
-from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, listar_jueces, vincular_juez, desvincular_juez
+from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -32,6 +32,13 @@ async def listar_torneos(request: Request, user=Depends(get_current_user), db: A
     data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad} for t in torneos]
     return {"success": True, "data": data, "error": None}
 
+@router.get("/jueces/buscar", response_model=dict)
+async def buscar_jueces(q: str = "", request: Request = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    roles = getattr(request.state, "roles", []) if request else []
+    if "super_admin" not in roles and "organizador" not in roles:
+        raise Forbidden("Solo el organizador puede buscar jueces")
+    return {"success": True, "data": await buscar_usuarios_jueces(db, q), "error": None}
+
 @router.get("/{torneo_id}/jueces", response_model=dict)
 async def jueces_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(torneo_id, "torneo_id")
@@ -44,7 +51,16 @@ async def vincular_juez_torneo(torneo_id: str, body: JuezVincularIn, request: Re
     _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
-    data = await vincular_juez(db, torneo_id, body.email, user.id, is_super, is_org)
+    data = await vincular_juez(db, torneo_id, body.email, user.id, is_super, is_org, body.rol)
+    return {"success": True, "data": data, "error": None}
+
+@router.put("/{torneo_id}/jueces/{user_id}", response_model=dict)
+async def rol_juez_torneo(torneo_id: str, user_id: str, body: JuezRolIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    _validate_uuid(user_id, "user_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    data = await asignar_rol_juez(db, torneo_id, user_id, body.rol, user.id, is_super, is_org)
     return {"success": True, "data": data, "error": None}
 
 @router.delete("/{torneo_id}/jueces/{user_id}", response_model=dict)
