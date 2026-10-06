@@ -87,22 +87,27 @@ async def generar_reporte(db: AsyncSession, tipo: str, params: dict, user) -> tu
     es_staff = "organizador" in roles or "super_admin" in roles
 
     if tipo == "perfil_atleta":
+        from app.atletas.models import Atleta
         atleta_id = (params or {}).get("atleta_id")
         if not atleta_id:
             raise AppError(400, "PARAM_FALTANTE", "atleta_id requerido")
+        res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
+        atl = res.scalar_one_or_none()
         if not es_staff:
-            from app.atletas.models import Atleta
-            res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
-            atl = res.scalar_one_or_none()
             if not atl or str(atl.user_id or "") != str(user.id):
                 raise Forbidden("Solo puedes ver tu propio reporte")
         datos = await get_atleta_resumen(db, atleta_id)
+        datos["nombre"] = (atl.nombre_completo if atl else "") or ""
         return _pdf_perfil_atleta(datos)
     if tipo == "perfil_juez":
+        from app.auth.models import Profile
         uid = (params or {}).get("user_id") or str(user.id)
         if not es_staff and str(uid) != str(user.id):
             raise Forbidden("Solo puedes ver tu propio reporte")
         datos = await get_juez_resumen(db, uid)
+        res = await db.execute(select(Profile).where(Profile.id == str(uid)))
+        prof = res.scalar_one_or_none()
+        datos["nombre"] = (prof.nombre_completo if prof else "") or ""
         return _pdf_perfil_juez(datos, uid)
     if tipo in ("parcial", "final"):
         if not es_staff:
@@ -121,8 +126,7 @@ async def generar_reporte(db: AsyncSession, tipo: str, params: dict, user) -> tu
 
 def _pdf_perfil_atleta(d: dict):
     cuerpo: list = []
-    nombre = ""
-    _portada(cuerpo, "PERFIL DEL ATLETA", "Reporte del deportista",
+    _portada(cuerpo, "PERFIL DEL ATLETA", d.get("nombre") or "Reporte del deportista",
              [f"Generado: {_ahora_str()}"])
     cuerpo.append(Paragraph("Números", EST_H2))
     cuerpo.append(_tabla(
@@ -176,7 +180,7 @@ def _pdf_perfil_atleta(d: dict):
 
 def _pdf_perfil_juez(d: dict, uid: str):
     cuerpo: list = []
-    _portada(cuerpo, "PERFIL DEL JUEZ", "Reporte del juez",
+    _portada(cuerpo, "PERFIL DEL JUEZ", d.get("nombre") or "Reporte del juez",
              [f"Arbitrados: {d.get('arbitrados', 0)} · Por arbitrar: {d.get('por_arbitrar', 0)} · Total: {d.get('total', 0)}"])
     cuerpo.append(Paragraph("Por torneo", EST_H2))
     filas = [["Torneo", "Partidos"]]
