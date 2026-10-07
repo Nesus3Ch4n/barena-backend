@@ -81,6 +81,11 @@ class JuezRolIn(BaseModel):
     # Asigna el rol de oficial al juez vinculado (None = quitar el rol, queda vinculado legacy)
     rol: Optional[str] = Field(default=None, max_length=24)
 
+class ComunicarIn(BaseModel):
+    destino: str = Field(default="atletas", pattern="^(atletas|jueces|todos)$")
+    titulo: str = Field(min_length=2, max_length=120)
+    mensaje: str = Field(default="", max_length=2000)
+
 class VisibilidadUpdate(BaseModel):
     fixture_visible: Optional[bool] = None
     grupos_visible: Optional[bool] = None

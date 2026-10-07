@@ -788,3 +788,33 @@ async def get_deportistas(db: AsyncSession, torneo_id: str, user_id: str, is_sup
                           "tiene_cuenta": bool(a.user_id),
                           "telefono": tels.get(a.user_id)})
     return {"filas": filas, "total": len(filas)}
+
+async def comunicar(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool, destino: str, titulo: str, mensaje: str) -> dict:
+    """Broadcast de comunicado a atletas/jueces del torneo via notificaciones in-app (tope 200)."""
+    from sqlalchemy import text
+    from app.notificaciones.router import crear_notificacion
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    if destino not in ("atletas", "jueces", "todos"):
+        raise AppError(400, "DESTINO_INVALIDO", "destino debe ser atletas, jueces o todos")
+    uids: set[str] = set()
+    if destino in ("atletas", "todos"):
+        res = await db.execute(text(
+            "SELECT DISTINCT a.user_id FROM atletas a JOIN equipos e ON e.id = a.equipo_id "
+            "JOIN categorias c ON c.id = e.categoria_id WHERE c.torneo_id = :tid AND a.user_id IS NOT NULL"
+        ).bindparams(tid=str(torneo_id)))
+        uids |= {r[0] for r in res.fetchall()}
+    if destino in ("jueces", "todos"):
+        res = await db.execute(text(
+            "SELECT DISTINCT user_id FROM torneo_jueces WHERE torneo_id = :tid"
+        ).bindparams(tid=str(torneo_id)))
+        uids |= {r[0] for r in res.fetchall()}
+    if destino == "todos":
+        uids.discard(user_id)
+    uids = {u for u in uids if u and u != "notificaciones"}
+    total = len(uids)
+    if total == 0:
+        return {"destino": destino, "enviadas": 0, "titulo": titulo, "mensaje": mensaje}
+    for uid in list(uids)[:200]:
+        await crear_notificacion(db, uid, "comunicado", titulo, mensaje)
+    await db.flush()
+    return {"destino": destino, "enviadas": min(total, 200), "titulo": titulo, "mensaje": mensaje}
