@@ -797,7 +797,7 @@ async def comunicar(db: AsyncSession, torneo_id: str, user_id: str, is_super: bo
     if destino not in ("atletas", "jueces", "todos"):
         raise AppError(400, "DESTINO_INVALIDO", "destino debe ser atletas, jueces o todos")
     uids: set[str] = set()
-if destino in ("atletas", "todos"):
+    if destino in ("atletas", "todos"):
         res = await db.execute(text(
             "SELECT DISTINCT a.user_id FROM atletas a JOIN equipos e ON e.id = a.equipo_id "
             "JOIN categorias c ON c.id = e.categoria_id JOIN ramas r ON r.id = c.rama_id "
@@ -809,7 +809,7 @@ if destino in ("atletas", "todos"):
             "SELECT DISTINCT user_id FROM torneo_jueces WHERE torneo_id = :tid"
         ).bindparams(tid=str(torneo_id)))
         uids |= {r[0] for r in res.fetchall()}
-if destino == "todos":
+    if destino == "todos":
         uids.discard(user_id)
     uids = {u for u in uids if u}
     total = len(uids)
