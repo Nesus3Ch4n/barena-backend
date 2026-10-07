@@ -758,3 +758,33 @@ async def get_inscripciones(db: AsyncSession, torneo_id: str, user_id: str, is_s
                           "inscrito_en": eq.inscrito_en.isoformat() if eq.inscrito_en else None,
                           "atletas": atletas})
     return {"filas": filas, "resumen": resumen}
+
+
+async def get_deportistas(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool = False) -> dict:
+    """Directorio de deportistas del torneo para el módulo Deportistas. Solo lectura."""
+    from app.equipos.models import Equipo
+    from app.atletas.models import Atleta
+    from app.auth.models import Profile
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    filas = []
+    for rama, cat in await _categorias_torneo(db, torneo_id):
+        res = await db.execute(select(Equipo).where(
+            Equipo.categoria_id == cat.id, Equipo.estado != "eliminado").order_by(Equipo.nombre))
+        equipos = {e.id: e for e in res.scalars().all()}
+        if not equipos:
+            continue
+        res = await db.execute(select(Atleta).where(
+            Atleta.equipo_id.in_(list(equipos.keys()))).order_by(Atleta.nombre_completo))
+        atls = list(res.scalars().all())
+        uids = [a.user_id for a in atls if a.user_id]
+        res = await db.execute(select(Profile).where(Profile.id.in_(uids))) if uids else None
+        tels = {p.id: p.telefono for p in res.scalars().all()} if res is not None else {}
+        for a in atls:
+            eq = equipos.get(a.equipo_id)
+            filas.append({"id": a.id, "nombre_completo": a.nombre_completo,
+                          "codigo_reclamo": a.codigo_reclamo, "posicion": a.posicion,
+                          "equipo_id": a.equipo_id, "equipo_nombre": eq.nombre if eq else "—",
+                          "categoria": cat.nombre, "rama_tipo": rama.tipo,
+                          "tiene_cuenta": bool(a.user_id),
+                          "telefono": tels.get(a.user_id)})
+    return {"filas": filas, "total": len(filas)}

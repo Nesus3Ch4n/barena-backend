@@ -6,7 +6,7 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas
 from app.torneos.models import Torneo
 
 def _validate_uuid(value: str, field: str = "id"):
@@ -94,6 +94,13 @@ async def inscripciones_torneo(torneo_id: str, request: Request, user=Depends(ge
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
     return {"success": True, "data": await get_inscripciones(db, torneo_id, user.id, is_super, is_org), "error": None}
+
+@router.get("/{torneo_id}/deportistas", response_model=dict)
+async def deportistas_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    return {"success": True, "data": await get_deportistas(db, torneo_id, user.id, is_super, is_org), "error": None}
 
 @router.get("/{torneo_id}", response_model=dict)
 async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
