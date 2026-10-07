@@ -801,12 +801,12 @@ async def comunicar(db: AsyncSession, torneo_id: str, user_id: str, is_super: bo
         res = await db.execute(text(
             "SELECT DISTINCT a.user_id FROM atletas a JOIN equipos e ON e.id = a.equipo_id "
             "JOIN categorias c ON c.id = e.categoria_id JOIN ramas r ON r.id = c.rama_id "
-            "WHERE r.torneo_id = :tid AND a.user_id IS NOT NULL"
+            "WHERE r.torneo_id = :tid::uuid AND a.user_id IS NOT NULL"
         ).bindparams(tid=str(torneo_id)))
         uids |= {r[0] for r in res.fetchall()}
     if destino in ("jueces", "todos"):
         res = await db.execute(text(
-            "SELECT DISTINCT user_id FROM torneo_jueces WHERE torneo_id = :tid"
+            "SELECT DISTINCT user_id FROM torneo_jueces WHERE torneo_id = :tid::uuid"
         ).bindparams(tid=str(torneo_id)))
         uids |= {r[0] for r in res.fetchall()}
     if destino == "todos":
