@@ -56,3 +56,15 @@ async def responder_pqr(db: AsyncSession, pqr_id: str, user_id: str, is_super: b
         pqr.respuesta = respuesta.strip() or None
     await db.flush()
     return {"id": pqr.id, "estado": pqr.estado}
+
+
+async def borrar_pqr(db: AsyncSession, pqr_id: str, user_id: str, is_super: bool, is_org: bool = False) -> dict:
+    from app.torneos.service import _torneo_para_jueces
+    res = await db.execute(select(PQR).where(PQR.id == pqr_id))
+    pqr = res.scalar_one_or_none()
+    if not pqr:
+        raise NotFound("PQR_NOT_FOUND", "PQR no existe", {"id": pqr_id})
+    await _torneo_para_jueces(db, pqr.torneo_id, user_id, is_super, is_org)
+    await db.delete(pqr)
+    await db.flush()
+    return {"id": pqr_id, "eliminada": True}

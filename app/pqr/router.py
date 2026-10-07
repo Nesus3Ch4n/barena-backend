@@ -6,7 +6,7 @@ from typing import Optional
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import BadRequest
-from app.pqr.service import radicar_pqr, listar_pqr, responder_pqr
+from app.pqr.service import radicar_pqr, listar_pqr, responder_pqr, borrar_pqr
 
 router = APIRouter(tags=["pqr"])
 
@@ -50,3 +50,11 @@ async def responder(pqr_id: str, body: PQRResponderIn, request: Request, user=De
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
     return {"success": True, "data": await responder_pqr(db, pqr_id, user.id, is_super, is_org, body.estado, body.respuesta), "error": None}
+
+
+@router.delete("/pqr/{pqr_id}", response_model=dict)
+async def borrar(pqr_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(pqr_id, "pqr_id")
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    return {"success": True, "data": await borrar_pqr(db, pqr_id, user.id, is_super, is_org), "error": None}
