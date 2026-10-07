@@ -714,3 +714,47 @@ async def list_amonestaciones_torneo(db: AsyncSession, torneo_id: str, user_id: 
         if len(items) >= 300:
             break
     return {"items": items, "contadores": contadores, "total": len(items)}
+
+
+async def get_inscripciones(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool = False) -> dict:
+    """Duplas inscritas con atletas y contacto para el módulo Inscripciones. Solo lectura."""
+    from app.equipos.models import Equipo
+    from app.atletas.models import Atleta
+    from app.auth.models import Profile
+    from app.torneos.models import Grupo
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    filas = []
+    resumen = {"pendiente": 0, "aprobado": 0, "otros": 0, "total": 0}
+    for rama, cat in await _categorias_torneo(db, torneo_id):
+        res = await db.execute(select(Equipo).where(
+            Equipo.categoria_id == cat.id, Equipo.estado != "eliminado").order_by(Equipo.nombre))
+        equipos = list(res.scalars().all())
+        if not equipos:
+            continue
+        res = await db.execute(select(Grupo).where(Grupo.categoria_id == cat.id))
+        grupos = {g.id: g.nombre for g in res.scalars().all()}
+        for eq in equipos:
+            res = await db.execute(select(Atleta).where(
+                Atleta.equipo_id == eq.id).order_by(Atleta.nombre_completo))
+            atls = list(res.scalars().all())
+            uids = [a.user_id for a in atls if a.user_id]
+            res = await db.execute(select(Profile).where(Profile.id.in_(uids))) if uids else None
+            tels = {p.id: p.telefono for p in res.scalars().all()} if res is not None else {}
+            atletas = [{"id": a.id, "nombre_completo": a.nombre_completo,
+                        "codigo_reclamo": a.codigo_reclamo, "posicion": a.posicion,
+                        "tiene_cuenta": bool(a.user_id),
+                        "telefono": tels.get(a.user_id)} for a in atls]
+            if eq.estado == "pendiente":
+                resumen["pendiente"] += 1
+            elif eq.estado == "aprobado":
+                resumen["aprobado"] += 1
+            else:
+                resumen["otros"] += 1
+            resumen["total"] += 1
+            filas.append({"id": eq.id, "nombre": eq.nombre, "categoria_id": cat.id,
+                          "categoria": cat.nombre, "rama_tipo": rama.tipo,
+                          "grupo": grupos.get(eq.grupo_id), "estado": eq.estado,
+                          "seed": eq.seed,
+                          "inscrito_en": eq.inscrito_en.isoformat() if eq.inscrito_en else None,
+                          "atletas": atletas})
+    return {"filas": filas, "resumen": resumen}
