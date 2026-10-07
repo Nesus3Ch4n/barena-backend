@@ -25,7 +25,6 @@ from app.admin.router import router as admin_perfiles_router
 from app.notificaciones.router import router as notificaciones_router
 from app.reportes_pdf.router import router as reportes_pdf_router
 from app.pqr.router import router as pqr_router
-from app.tmp_pqr import router as tmp_pqr_router
 
 app = FastAPI(
     title="ServeTrack API",
@@ -61,7 +60,6 @@ app.include_router(estadisticas_atleta_router, prefix="/api/v1")
 app.include_router(rankings_categoria_router, prefix="/api/v1")
 app.include_router(rankings_torneo_router, prefix="/api/v1")
 app.include_router(rankings_global_router, prefix="/api/v1")
-app.include_router(tmp_pqr_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health(request: Request):
