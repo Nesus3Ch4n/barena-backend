@@ -797,10 +797,11 @@ async def comunicar(db: AsyncSession, torneo_id: str, user_id: str, is_super: bo
     if destino not in ("atletas", "jueces", "todos"):
         raise AppError(400, "DESTINO_INVALIDO", "destino debe ser atletas, jueces o todos")
     uids: set[str] = set()
-    if destino in ("atletas", "todos"):
+if destino in ("atletas", "todos"):
         res = await db.execute(text(
             "SELECT DISTINCT a.user_id FROM atletas a JOIN equipos e ON e.id = a.equipo_id "
-            "JOIN categorias c ON c.id = e.categoria_id WHERE c.torneo_id = :tid AND a.user_id IS NOT NULL"
+            "JOIN categorias c ON c.id = e.categoria_id JOIN ramas r ON r.id = c.rama_id "
+            "WHERE r.torneo_id = :tid AND a.user_id IS NOT NULL"
         ).bindparams(tid=str(torneo_id)))
         uids |= {r[0] for r in res.fetchall()}
     if destino in ("jueces", "todos"):
@@ -808,9 +809,9 @@ async def comunicar(db: AsyncSession, torneo_id: str, user_id: str, is_super: bo
             "SELECT DISTINCT user_id FROM torneo_jueces WHERE torneo_id = :tid"
         ).bindparams(tid=str(torneo_id)))
         uids |= {r[0] for r in res.fetchall()}
-    if destino == "todos":
+if destino == "todos":
         uids.discard(user_id)
-    uids = {u for u in uids if u and u != "notificaciones"}
+    uids = {u for u in uids if u}
     total = len(uids)
     if total == 0:
         return {"destino": destino, "enviadas": 0, "titulo": titulo, "mensaje": mensaje}
