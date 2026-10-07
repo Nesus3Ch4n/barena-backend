@@ -497,3 +497,220 @@ async def delete_categoria(db: AsyncSession, categoria_id: str):
         raise AppError(400, "CATEGORIA_HAS_PARTIDOS", "No se puede eliminar categoría con partidos generados")
     await db.delete(cat)
     await db.flush()
+
+
+# ============================================================
+# Tablero de Control del organizador (agregados de solo lectura)
+# ============================================================
+
+TIPOS_AMONESTACION = ("tarjeta_amarilla", "tarjeta_roja", "sancion", "descalificacion")
+TIPO_AMONESTACION_LABEL = {
+    "tarjeta_amarilla": "T. Amarilla",
+    "tarjeta_roja": "T. Roja",
+    "sancion": "Sanción",
+    "descalificacion": "Descalificación",
+}
+
+
+async def _categorias_torneo(db: AsyncSession, torneo_id: str):
+    """Pares (rama, categoria) del torneo, ordenados por rama y nombre."""
+    from app.torneos.models import Rama, Categoria
+    res = await db.execute(select(Rama).where(Rama.torneo_id == torneo_id).order_by(Rama.tipo))
+    out = []
+    for rama in res.scalars().all():
+        res = await db.execute(select(Categoria).where(Categoria.rama_id == rama.id).order_by(Categoria.nombre))
+        for cat in res.scalars().all():
+            out.append((rama, cat))
+    return out
+
+
+def _rama_vacia(tipo: str) -> dict:
+    return {"tipo": tipo, "categorias": 0, "pendiente": 0, "aprobado": 0, "otros": 0,
+            "total_equipos": 0, "capacidad": 0, "p_pendiente": 0, "p_en_juego": 0,
+            "p_finalizado": 0, "amarillas": 0, "rojas": 0, "sanciones": 0, "descalificaciones": 0}
+
+
+async def get_tablero(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool, is_org: bool = False) -> dict:
+    """Agregados por rama para el Tablero de Control. Solo lectura, sin migraciones.
+
+    Capacidad = suma por categoría CON grupos generados de (nº grupos × equipos_x_grupo);
+    las categorías sin fixture se reportan aparte en `sin_fixture` (capacidad 0).
+    """
+    from app.equipos.models import Equipo
+    from app.partidos.models import Partido, PartidoEvento
+    from app.torneos.models import Grupo
+    torneo = await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    ramas: dict = {}
+    sin_fixture = []
+    for rama, cat in await _categorias_torneo(db, torneo_id):
+        r = ramas.setdefault(rama.tipo, _rama_vacia(rama.tipo))
+        r["categorias"] += 1
+        res = await db.execute(select(Equipo).where(Equipo.categoria_id == cat.id, Equipo.estado != "eliminado"))
+        equipos = list(res.scalars().all())
+        for eq in equipos:
+            if eq.estado == "pendiente":
+                r["pendiente"] += 1
+            elif eq.estado == "aprobado":
+                r["aprobado"] += 1
+            else:
+                r["otros"] += 1
+        r["total_equipos"] += len(equipos)
+        res = await db.execute(select(Grupo).where(Grupo.categoria_id == cat.id))
+        n_grupos = len(list(res.scalars().all()))
+        r["capacidad"] += n_grupos * (cat.equipos_x_grupo or 0)
+        if not n_grupos:
+            sin_fixture.append({"categoria_id": cat.id, "nombre": cat.nombre,
+                                "rama_tipo": rama.tipo, "equipos": len(equipos)})
+        res = await db.execute(select(Partido).where(Partido.categoria_id == cat.id))
+        partidos = list(res.scalars().all())
+        for p in partidos:
+            if p.estado == "pendiente":
+                r["p_pendiente"] += 1
+            elif p.estado == "en_juego":
+                r["p_en_juego"] += 1
+            elif p.estado == "finalizado":
+                r["p_finalizado"] += 1
+        if partidos:
+            res = await db.execute(select(PartidoEvento).where(
+                PartidoEvento.partido_id.in_([p.id for p in partidos]),
+                PartidoEvento.tipo.in_(TIPOS_AMONESTACION),
+                PartidoEvento.revocado == False))
+            for e in res.scalars().all():
+                if e.tipo == "tarjeta_amarilla":
+                    r["amarillas"] += 1
+                elif e.tipo == "tarjeta_roja":
+                    r["rojas"] += 1
+                elif e.tipo == "sancion":
+                    r["sanciones"] += 1
+                elif e.tipo == "descalificacion":
+                    r["descalificaciones"] += 1
+    lista = list(ramas.values())
+    for r in lista:
+        cap = r["capacidad"]
+        r["ocupacion_pct"] = round(100 * r["aprobado"] / cap) if cap > 0 else 0
+        r["disponibles"] = max(0, cap - r["aprobado"]) if cap > 0 else 0
+        r["sanciones_total"] = r["amarillas"] + r["rojas"] + r["sanciones"] + r["descalificaciones"]
+    total = {"categorias": 0, "pendiente": 0, "aprobado": 0, "otros": 0, "total_equipos": 0,
+             "capacidad": 0, "p_pendiente": 0, "p_en_juego": 0, "p_finalizado": 0,
+             "amarillas": 0, "rojas": 0, "sanciones": 0, "descalificaciones": 0}
+    for r in lista:
+        for k in total:
+            total[k] += r[k]
+    cap = total["capacidad"]
+    total["ocupacion_pct"] = round(100 * total["aprobado"] / cap) if cap > 0 else 0
+    total["disponibles"] = max(0, cap - total["aprobado"]) if cap > 0 else 0
+    total["sanciones_total"] = total["amarillas"] + total["rojas"] + total["sanciones"] + total["descalificaciones"]
+    return {"torneo": {"id": torneo.id, "nombre": torneo.nombre},
+            "ramas": lista, "total": total, "sin_fixture": sin_fixture}
+
+
+def _set_contexto_torneo(evs_ordenados, seq_objetivo: int):
+    """Set actual y marcador al momento del evento (misma lógica que estadísticas)."""
+    ult_set, n_set, sl, sv = 0, 1, 0, 0
+    for e in evs_ordenados:
+        if e.seq > seq_objetivo:
+            break
+        if e.tipo == "set_ganado":
+            ult_set, n_set = e.seq, n_set + 1
+    for e in evs_ordenados:
+        if e.tipo == "punto" and e.seq > ult_set and e.seq <= seq_objetivo:
+            if e.lado == "local":
+                sl += 1
+            else:
+                sv += 1
+    return n_set, f"{sl}-{sv}"
+
+
+async def list_amonestaciones_torneo(db: AsyncSession, torneo_id: str, user_id: str, is_super: bool,
+                                     is_org: bool = False, tipo: str | None = None,
+                                     partido_id: str | None = None, q: str | None = None) -> dict:
+    """Bitácora de amonestaciones del torneo para el panel de Control.
+
+    Solo lectura. Excluye eventos revocados. Los contadores son globales del torneo
+    (sin filtros); `items` respeta tipo/partido_id/q. Sin migraciones.
+    """
+    from app.partidos.models import Partido, PartidoEvento
+    from app.equipos.models import Equipo
+    from app.atletas.models import Atleta
+    from app.auth.models import Profile
+    await _torneo_para_jueces(db, torneo_id, user_id, is_super, is_org)
+    if tipo is not None and tipo not in TIPOS_AMONESTACION:
+        raise AppError(400, "TIPO_INVALIDO", f"tipo debe ser uno de {list(TIPOS_AMONESTACION)}")
+    pares = await _categorias_torneo(db, torneo_id)
+    cat_ids = [c.id for _, c in pares]
+    if not cat_ids:
+        return {"items": [], "contadores": {"total": 0, "amarillas": 0, "rojas": 0, "sanciones": 0, "descalificaciones": 0}, "total": 0}
+    res = await db.execute(select(Partido).where(Partido.categoria_id.in_(cat_ids)))
+    partidos = {p.id: p for p in res.scalars().all()}
+    if not partidos:
+        return {"items": [], "contadores": {"total": 0, "amarillas": 0, "rojas": 0, "sanciones": 0, "descalificaciones": 0}, "total": 0}
+    res = await db.execute(select(PartidoEvento).where(
+        PartidoEvento.partido_id.in_(list(partidos.keys())),
+        PartidoEvento.tipo.in_(TIPOS_AMONESTACION),
+        PartidoEvento.revocado == False).order_by(PartidoEvento.creado_at.desc()).limit(1000))
+    eventos = list(res.scalars().all())
+    contadores = {"total": len(eventos), "amarillas": 0, "rojas": 0, "sanciones": 0, "descalificaciones": 0}
+    for e in eventos:
+        if e.tipo == "tarjeta_amarilla":
+            contadores["amarillas"] += 1
+        elif e.tipo == "tarjeta_roja":
+            contadores["rojas"] += 1
+        elif e.tipo == "sancion":
+            contadores["sanciones"] += 1
+        elif e.tipo == "descalificacion":
+            contadores["descalificaciones"] += 1
+    # nombres de equipos / atletas / árbitros
+    eids = {x for p in partidos.values() for x in (p.equipo_local_id, p.equipo_visit_id) if x}
+    res = await db.execute(select(Equipo).where(Equipo.id.in_(eids))) if eids else None
+    noms_eq = {e.id: e.nombre for e in res.scalars().all()} if res is not None else {}
+    aids = {e.atleta_id for e in eventos if e.atleta_id}
+    res = await db.execute(select(Atleta).where(Atleta.id.in_(aids))) if aids else None
+    noms_atl = {a.id: a.nombre_completo for a in res.scalars().all()} if res is not None else {}
+    uids = {p.arbitro_id for p in partidos.values() if p.arbitro_id}
+    res = await db.execute(select(Profile).where(Profile.id.in_(uids))) if uids else None
+    noms_juez = {p.id: p.nombre_completo for p in res.scalars().all()} if res is not None else {}
+    # eventos por partido (ordenados) para calcular el set
+    por_partido: dict = {}
+    if eventos:
+        res = await db.execute(select(PartidoEvento).where(
+            PartidoEvento.partido_id.in_(list({e.partido_id for e in eventos}))).order_by(
+            PartidoEvento.partido_id, PartidoEvento.seq))
+        for e in res.scalars().all():
+            por_partido.setdefault(e.partido_id, []).append(e)
+    items = []
+    ql = (q or "").strip().lower()
+    for e in eventos:
+        if tipo is not None and e.tipo != tipo:
+            continue
+        if partido_id is not None and e.partido_id != partido_id:
+            continue
+        p = partidos.get(e.partido_id)
+        nom_l = noms_eq.get(p.equipo_local_id, "Por definir") if p else "—"
+        nom_v = noms_eq.get(p.equipo_visit_id, "Por definir") if p else "—"
+        subtipo = str((e.extra or {}).get("tipo", "")) if e.tipo == "sancion" else ""
+        label = TIPO_AMONESTACION_LABEL.get(e.tipo, e.tipo)
+        if subtipo:
+            label = f"{label} · {subtipo}"
+        desc = str((e.extra or {}).get("observacion", "") or "") or (e.razon or "") or label
+        nom_atl = noms_atl.get(e.atleta_id, "") if e.atleta_id else ""
+        hay = f"{desc} {nom_atl} {nom_l} {nom_v} {label}".lower()
+        if ql and ql not in hay:
+            continue
+        n_set, marcador = _set_contexto_torneo(por_partido.get(e.partido_id, []), e.seq)
+        items.append({
+            "id": e.id,
+            "creada_en": e.creado_at.isoformat() if e.creado_at else None,
+            "partido_id": e.partido_id,
+            "partido": f"{nom_l} vs {nom_v}" if p else "—",
+            "cancha": p.cancha if p else None,
+            "tipo": e.tipo,
+            "tipo_label": label,
+            "atleta": nom_atl or None,
+            "set": n_set,
+            "marcador": marcador,
+            "descripcion": desc,
+            "registrado_por": noms_juez.get(p.arbitro_id, "—") if p and p.arbitro_id else "—",
+        })
+        if len(items) >= 300:
+            break
+    return {"items": items, "contadores": contadores, "total": len(items)}
