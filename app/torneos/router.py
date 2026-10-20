@@ -107,10 +107,7 @@ async def comunicar_torneo(torneo_id: str, body: ComunicarIn, request: Request, 
     _validate_uuid(torneo_id, "torneo_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
-    try:
-        return {"success": True, "data": await comunicar(db, torneo_id, user.id, is_super, is_org, body.destino, body.titulo, body.mensaje), "error": None}
-    except Exception as exc:
-        raise AppError(500, "DEBUG_COMUNICAR", f"{type(exc).__name__}: {exc}", {})
+    return {"success": True, "data": await comunicar(db, torneo_id, user.id, is_super, is_org, body.destino, body.titulo, body.mensaje), "error": None}
 
 @router.get("/{torneo_id}", response_model=dict)
 async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
