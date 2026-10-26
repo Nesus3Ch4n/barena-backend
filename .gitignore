@@ -14,6 +14,7 @@ build/
 .env
 .env.local
 .env.production
+.env*.local
 
 # Alembic cache
 alembic/__pycache__/
