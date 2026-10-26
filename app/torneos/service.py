@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.torneos.models import Torneo, Rama, Categoria, Deporte
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
 from app.equipos.models import Equipo
-from app.shared.errors import AppError, NotFound, Forbidden
+from app.shared.errors import AppError, NotFound
 from app.auth.models import user_roles
 
 def slugify(text: str) -> str:
@@ -217,7 +217,7 @@ def visibilidad(torneo: Torneo) -> dict:
 def requiere_visibilidad(torneo: Torneo, *claves: str) -> None:
     vis = visibilidad(torneo)
     if not any(vis.get(k) for k in claves):
-        raise Forbidden("CONTENIDO_NO_PUBLICADO", "El organizador no ha publicado esta sección", {"requiere": list(claves)})
+        raise AppError(403, "CONTENIDO_NO_PUBLICADO", "El organizador no ha publicado esta sección", {"requiere": list(claves)})
 
 async def _tabla_jueces_ok(db: AsyncSession) -> bool:
     from sqlalchemy import text as _text
