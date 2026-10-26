@@ -77,6 +77,19 @@ async def get_current_user(
     request.state.roles = payload.get("roles", [])
     return user
 
+async def get_optional_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+    db: AsyncSession = Depends(get_db),
+):
+    if not credentials or not credentials.credentials:
+        return None
+    try:
+        return await get_current_user(request, credentials, db)
+    except Unauthorized:
+        return None
+
+
 def require_roles(*allowed: str):
     async def _checker(request: Request, user=Depends(get_current_user)):
         roles = getattr(request.state, "roles", [])

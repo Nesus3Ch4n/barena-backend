@@ -6,8 +6,10 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn, ComunicarIn
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
-from app.torneos.models import Torneo
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, get_torneo_publico, requiere_visibilidad, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
+from app.torneos.models import Torneo, Grupo
+from app.equipos.service import list_equipos
+from app.partidos.service import list_partidos_detalle
 
 def _validate_uuid(value: str, field: str = "id"):
     try:
@@ -297,6 +299,36 @@ async def detalle_public_torneo(torneo_id: str, db: AsyncSession = Depends(get_d
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público", {"id": torneo_id})
     ramas_data = [{"id": r.id, "tipo": r.tipo, "nombre_custom": r.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "clasificados": getattr(c, "clasificados", None), "criterio_emparejamiento": getattr(c, "criterio_emparejamiento", "directo"), "reglas_partido": getattr(c, "reglas_partido", None) or {}, "clasificacion": getattr(c, "clasificacion", "grupos"), "bracket_tipo": getattr(c, "bracket_tipo", "general"), "sets_x_partido": c.sets_x_partido, "puntos_x_set": c.puntos_x_set, "diferencia_dos_puntos": getattr(c, "diferencia_dos_puntos", True), "ranking_general_enabled": getattr(c, "ranking_general_enabled", True)} for c in cats]} for r, cats in result["ramas"]]
     return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad}, "ramas": ramas_data}, "error": None}
+
+@public_router.get("/torneos/{torneo_id}/equipos", response_model=dict)
+async def equipos_public_torneo(torneo_id: str, categoria_id: str = None, db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    await get_torneo_publico(db, torneo_id)
+    equipos = await list_equipos(db, torneo_id, categoria_id, None, "aprobado")
+    return {"success": True, "data": [{"id": e.id, "nombre": e.nombre, "categoria_id": e.categoria_id, "grupo_id": e.grupo_id, "estado": e.estado, "seed": e.seed} for e in equipos], "error": None}
+
+
+@public_router.get("/torneos/{torneo_id}/partidos", response_model=dict)
+async def partidos_public_torneo(torneo_id: str, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None, db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    torneo = await get_torneo_publico(db, torneo_id)
+    requiere_visibilidad(torneo, "fixture_visible")
+    data = await list_partidos_detalle(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
+    return {"success": True, "data": data, "error": None}
+
+
+@public_router.get("/torneos/{torneo_id}/grupos", response_model=dict)
+async def grupos_public_torneo(torneo_id: str, categoria_id: str = None, db: AsyncSession = Depends(get_db)):
+    from app.torneos.models import Rama, Categoria
+    _validate_uuid(torneo_id, "torneo_id")
+    torneo = await get_torneo_publico(db, torneo_id)
+    requiere_visibilidad(torneo, "grupos_visible", "fixture_visible", "posiciones_visible")
+    query = select(Grupo).join(Categoria, Grupo.categoria_id == Categoria.id).join(Rama, Categoria.rama_id == Rama.id).where(Rama.torneo_id == torneo_id)
+    if categoria_id:
+        query = query.where(Grupo.categoria_id == categoria_id)
+    res = await db.execute(query.order_by(Grupo.categoria_id, Grupo.orden))
+    return {"success": True, "data": [{"id": g.id, "nombre": g.nombre, "orden": g.orden, "categoria_id": g.categoria_id} for g in res.scalars()], "error": None}
+
 
 @public_router.get("/torneo/{slug}", response_model=dict)
 async def public_torneo(slug: str, db: AsyncSession = Depends(get_db)):

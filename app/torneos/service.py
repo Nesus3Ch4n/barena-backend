@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.torneos.models import Torneo, Rama, Categoria, Deporte
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
 from app.equipos.models import Equipo
-from app.shared.errors import AppError, NotFound
+from app.shared.errors import AppError, NotFound, Forbidden
 from app.auth.models import user_roles
 
 def slugify(text: str) -> str:
@@ -200,6 +200,24 @@ async def get_public_by_slug(db: AsyncSession, slug: str):
     if not torneo:
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público o no existe", {"slug": slug})
     return torneo
+
+
+async def get_torneo_publico(db: AsyncSession, torneo_id: str) -> Torneo:
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo or not torneo.publico:
+        raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público o no existe", {"id": torneo_id})
+    return torneo
+
+
+def visibilidad(torneo: Torneo) -> dict:
+    return dict(torneo.config_visibilidad or {})
+
+
+def requiere_visibilidad(torneo: Torneo, *claves: str) -> None:
+    vis = visibilidad(torneo)
+    if not any(vis.get(k) for k in claves):
+        raise Forbidden("CONTENIDO_NO_PUBLICADO", "El organizador no ha publicado esta sección", {"requiere": list(claves)})
 
 async def _tabla_jueces_ok(db: AsyncSession) -> bool:
     from sqlalchemy import text as _text

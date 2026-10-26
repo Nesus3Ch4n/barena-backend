@@ -714,6 +714,19 @@ async def list_partidos(db: AsyncSession, torneo_id: str = None, categoria_id: s
     res = await db.execute(query)
     return res.scalars().all()
 
+
+async def list_partidos_detalle(db: AsyncSession, torneo_id: str = None, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None):
+    from collections import defaultdict
+    partidos = await list_partidos(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
+    if not partidos:
+        return []
+    ids = [p.id for p in partidos]
+    res = await db.execute(select(SetPartido).where(SetPartido.partido_id.in_(ids)).order_by(SetPartido.partido_id, SetPartido.numero_set))
+    sets_por_partido = defaultdict(list)
+    for s in res.scalars().all():
+        sets_por_partido[s.partido_id].append({"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id})
+    return [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "arbitro_id": p.arbitro_id, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id, "sets": sets_por_partido.get(p.id, [])} for p in partidos]
+
 async def get_partido(db: AsyncSession, partido_id: str) -> tuple[Partido, list[SetPartido]]:
     res = await db.execute(select(Partido).where(Partido.id == partido_id))
     partido = res.scalar_one_or_none()

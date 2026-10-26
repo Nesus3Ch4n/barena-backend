@@ -8,7 +8,7 @@ from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
 from app.partidos.models import Partido
 from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, list_mis_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, list_partidos_detalle, list_mis_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -100,17 +100,7 @@ async def sincronizar(categoria_id: str, request: Request, user=Depends(require_
 
 @torneo_partidos_router.get("", response_model=dict)
 async def listar(torneo_id: str, categoria_id: str = None, grupo_id: str = None, fase: str = None, bracket_tipo: str = None, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    partidos = await list_partidos(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
-    if not partidos:
-        return {"success": True, "data": [], "error": None}
-    from collections import defaultdict
-    from app.partidos.models import SetPartido
-    ids = [p.id for p in partidos]
-    res = await db.execute(select(SetPartido).where(SetPartido.partido_id.in_(ids)).order_by(SetPartido.partido_id, SetPartido.numero_set))
-    sets_por_partido = defaultdict(list)
-    for s in res.scalars().all():
-        sets_por_partido[s.partido_id].append({"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id})
-    data = [{"id": p.id, "categoria_id": p.categoria_id, "grupo_id": p.grupo_id, "fase": p.fase, "llave": p.llave or 0, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "cancha": p.cancha, "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None, "estado": p.estado, "ganador_id": p.ganador_id, "bracket_tipo": p.bracket_tipo, "arbitro_id": p.arbitro_id, "orden_en_round": p.orden_en_round, "partido_siguiente_id": p.partido_siguiente_id, "sets": sets_por_partido.get(p.id, [])} for p in partidos]
+    data = await list_partidos_detalle(db, torneo_id, categoria_id, grupo_id, fase, bracket_tipo)
     return {"success": True, "data": data, "error": None}
 
 @router.patch("/{partido_id}/programar", response_model=dict)
