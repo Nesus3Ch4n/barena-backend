@@ -51,7 +51,7 @@ class Categoria(Base):
     criterio_emparejamiento: Mapped[str] = mapped_column(String(20), default="directo")
     reglas_partido: Mapped[dict] = mapped_column(JSON, nullable=True)
     clasificacion: Mapped[str] = mapped_column(String(20), default="grupos")
-    criterio_clasif: Mapped[str] = mapped_column(String(200), default="PG")
+    criterio_clasif: Mapped[str] = mapped_column(String(200), default="PG>CP")
     ranking_general_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     bracket_tipo: Mapped[str] = mapped_column(String(20), default="general")
     diferencia_dos_puntos: Mapped[bool] = mapped_column(Boolean, default=True)

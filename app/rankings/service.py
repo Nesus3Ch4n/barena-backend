@@ -14,10 +14,16 @@ async def list_rankings_categoria_grupo(db: AsyncSession, categoria_id: str):
     return res.scalars().all()
 
 def sort_general_rows(rows: list) -> list:
-    """Ordena la tabla general solo por partidos ganados.
-    Cociente de sets y cociente de puntos quedan deshabilitados; los empates
-    se resuelven por enfrentamiento directo o sorteo del organizador."""
-    rows.sort(key=lambda r: (-(r.pg or 0), str(r.equipo_id)))
+    """Ordena la tabla general por partidos ganados y cociente de puntos.
+    El cociente de sets queda deshabilitado; CP sí se usa para desempatar."""
+    def cp(r):
+        contra = r.puntos_contra or 0
+        favor = r.puntos_favor or 0
+        if contra == 0:
+            return 999999 if favor > 0 else 0
+        return favor / contra
+
+    rows.sort(key=lambda r: (-(r.pg or 0), -cp(r), -(r.puntos_favor or 0), str(r.equipo_id)))
     for pos, row in enumerate(rows, start=1):
         row.posicion = pos
     return rows
