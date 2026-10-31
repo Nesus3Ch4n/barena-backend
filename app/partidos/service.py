@@ -238,7 +238,7 @@ async def limpiar_resultados_fase_grupos(db: AsyncSession, categoria_id: str) ->
         p.tarjetas_amarillas_visit = 0
         p.tarjetas_rojas_visit = 0
     await db.flush()
-    await _sync_estado_torneo(db, categoria_id)
+    await _sync_estado_torneo(db, categoria_id, force=True)
     return limpiados
 
 
@@ -1673,7 +1673,7 @@ async def finalizar_partido(db: AsyncSession, partido_id: str) -> dict:
     snap = await live_snapshot(db, partido_id)
     return {"resumen": _resumen_final(partido, snap), "snapshot": snap}
 
-async def _sync_estado_torneo(db: AsyncSession, categoria_id: str) -> None:
+async def _sync_estado_torneo(db: AsyncSession, categoria_id: str, force: bool = False) -> None:
     """Mantiene torneos.estado al día: activo al primer resultado y finalizado
     cuando ya no queda ningún partido pendiente en el torneo."""
     from app.torneos.models import Torneo
@@ -1685,7 +1685,7 @@ async def _sync_estado_torneo(db: AsyncSession, categoria_id: str) -> None:
         return
     res = await db.execute(select(Torneo).where(Torneo.id == str(torneo_id)))
     torneo = res.scalar_one_or_none()
-    if not torneo or torneo.estado == "finalizado":
+    if not torneo or (torneo.estado == "finalizado" and not force):
         return
     res = await db.execute(
         select(func.count(Partido.id), func.count(Partido.id).filter(Partido.estado == "finalizado"))
