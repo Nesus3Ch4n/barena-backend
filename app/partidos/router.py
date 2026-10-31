@@ -8,7 +8,7 @@ from app.shared.security import get_current_user, require_roles
 from app.shared.errors import AppError, NotFound, Forbidden
 from app.partidos.models import Partido
 from app.partidos.schemas import GenerarFixtureIn, AvanzarIn, IniciarIn, GrupoUpdate, PartidoCreate, PartidoUpdate, ProgramarIn, ResultadoIn, LiveEventoIn
-from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, list_partidos_detalle, list_mis_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, sincronizar_categoria, verify_juez_partido
+from app.partidos.service import actualizar_grupo, crear_partido_manual, actualizar_partido, eliminar_grupo, eliminar_partido, generar_fixture, generar_bracket_desde_ranking, programar_partido, registrar_resultado, list_partidos, list_partidos_detalle, list_mis_partidos, get_partido, live_snapshot, live_evento, live_undo, iniciar_partido, finalizar_partido, borrar_partidos_fase_grupos, borrar_partidos_bracket, limpiar_resultados_fase_grupos, sincronizar_categoria, verify_juez_partido
 
 router = APIRouter(prefix="/partidos", tags=["partidos"])
 torneo_partidos_router = APIRouter(prefix="/torneos/{torneo_id}/partidos", tags=["partidos"])
@@ -62,6 +62,12 @@ async def avanzar_bracket(categoria_id: str, body: AvanzarIn = None, request: Re
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
     partidos, pendientes_previos = await generar_bracket_desde_ranking(db, categoria_id, (body.confirmar if body else False), (body.emparejamiento if body else None))
     return {"success": True, "data": {"generados": len(partidos), "ya_existia": pendientes_previos > 0, "partidos": [{"id": p.id, "fase": p.fase, "llave": p.llave, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
+
+@categoria_fixture_router.post("/partidos/grupos/limpiar-resultados", response_model=dict)
+async def limpiar_resultados_grupos(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
+    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
+    limpiados = await limpiar_resultados_fase_grupos(db, categoria_id)
+    return {"success": True, "data": {"limpiados": limpiados}, "error": None}
 
 @categoria_fixture_router.delete("/partidos/grupos", response_model=dict)
 async def borrar_fase_grupos(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):

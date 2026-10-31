@@ -211,6 +211,37 @@ async def borrar_partidos_bracket(db: AsyncSession, categoria_id: str) -> int:
         await db.flush()
     return len(ids)
 
+async def limpiar_resultados_fase_grupos(db: AsyncSession, categoria_id: str) -> int:
+    """Borra sets, eventos y estados de los partidos de grupos, conservando
+    la programación (fecha, cancha, árbitro, grupo y duplas)."""
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase == "grupos"))
+    partidos = list(res.scalars().all())
+    if not partidos:
+        return 0
+    ids = [p.id for p in partidos]
+    await db.execute(delete(SetPartido).where(SetPartido.partido_id.in_(ids)))
+    await db.execute(delete(PartidoEvento).where(PartidoEvento.partido_id.in_(ids)))
+    limpiados = 0
+    for p in partidos:
+        if p.estado != "pendiente" or p.ganador_id:
+            limpiados += 1
+        p.estado = "pendiente"
+        p.ganador_id = None
+        p.sorteo_ganador_id = None
+        p.saque_equipo_id = None
+        p.saque_atleta_id = None
+        p.iniciado_en = None
+        p.iniciado_por = None
+        p.finalizado_en = None
+        p.tarjetas_amarillas_local = 0
+        p.tarjetas_rojas_local = 0
+        p.tarjetas_amarillas_visit = 0
+        p.tarjetas_rojas_visit = 0
+    await db.flush()
+    await _sync_estado_torneo(db, categoria_id)
+    return limpiados
+
+
 async def sincronizar_categoria(db: AsyncSession, categoria_id: str) -> dict:
     """Sincronización incremental de la fase de grupos: elimina solo pendientes
     obsoletos (duplas retiradas/movidas) y crea solo los pares faltantes.
