@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from app.atletas.models import Atleta
 from app.torneos.models import Grupo
 from app.shared.errors import NotFound
@@ -30,7 +30,7 @@ async def mis_duplas(db: AsyncSession, user_id: str):
     """Filas Atleta vinculadas a la cuenta, con dupla/torneo y partidos en vivo de cada una."""
     from app.equipos.models import Equipo
     from app.torneos.models import Categoria, Rama, Torneo
-    from app.partidos.models import Partido
+    from app.partidos.models import Partido, SetPartido
     res = await db.execute(select(Atleta).where(Atleta.user_id == str(user_id)))
     filas = res.scalars().all()
     out = []
@@ -61,10 +61,36 @@ async def mis_duplas(db: AsyncSession, user_id: str):
                   "rival_id": str(p.equipo_visit_id) if str(p.equipo_local_id) == str(eq.id) else str(p.equipo_local_id),
                   "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None}
                  for p in res6.scalars().all()]
+        res7 = await db.execute(
+            select(Partido).where(
+                ((Partido.equipo_local_id == eq.id) | (Partido.equipo_visit_id == eq.id)),
+                Partido.estado == "finalizado",
+            ).order_by(desc(Partido.fecha_hora)).limit(8)
+        )
+        finalizados = []
+        for p in res7.scalars().all():
+            rival_id = p.equipo_visit_id if str(p.equipo_local_id) == str(eq.id) else p.equipo_local_id
+            rival_nombre = None
+            if rival_id:
+                res_rival = await db.execute(select(Equipo).where(Equipo.id == rival_id))
+                rival = res_rival.scalar_one_or_none()
+                rival_nombre = rival.nombre if rival else None
+            res_sets = await db.execute(
+                select(SetPartido).where(SetPartido.partido_id == p.id).order_by(SetPartido.numero_set)
+            )
+            sets = [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante,
+                     "ganador_id": s.ganador_id} for s in res_sets.scalars().all()]
+            finalizados.append({
+                "id": p.id, "fase": p.fase, "cancha": p.cancha,
+                "fecha_hora": p.fecha_hora.isoformat() if p.fecha_hora else None,
+                "rival_id": str(rival_id) if rival_id else None, "rival_nombre": rival_nombre,
+                "gano": str(p.ganador_id) == str(eq.id),
+                "ganador_id": p.ganador_id, "sets": sets,
+            })
         out.append({"atleta_id": atl.id, "nombre_completo": atl.nombre_completo,
                     "equipo_id": eq.id, "equipo_nombre": eq.nombre, "estado_equipo": eq.estado,
                     "categoria_nombre": cat_nom, "torneo_id": tor_id, "torneo_nombre": tor_nom,
-                    "en_vivo": vivos})
+                    "en_vivo": vivos, "finalizados": finalizados})
     return out
 
 async def get_atleta_por_codigo(db: AsyncSession, codigo: str) -> dict:

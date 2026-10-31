@@ -524,6 +524,15 @@ async def update_categoria(db: AsyncSession, categoria_id: str, data) -> Categor
             else:
                 setattr(cat, k, v)
     await db.flush()
+    if "criterio_clasif" in upd and upd.get("criterio_clasif"):
+        # Recalcular posiciones con el nuevo criterio (sin cociente de sets por defecto).
+        from sqlalchemy import text as _text
+        from app.torneos.models import Grupo
+        res_grupos = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id))
+        for grupo in res_grupos.scalars().all():
+            await db.execute(_text("SELECT fn_recalc_rankings_grupo(:gid)"), {"gid": grupo.id})
+        await db.execute(_text("SELECT fn_recalc_rankings_general(:cid)"), {"cid": categoria_id})
+        await db.flush()
     if reglas is not None:
         from sqlalchemy import text as _text
         ex = await db.execute(_text("SELECT 1 FROM information_schema.columns WHERE table_name='categorias' AND column_name='reglas_partido'"))

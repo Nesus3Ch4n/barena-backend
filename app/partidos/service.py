@@ -386,11 +386,12 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
         # Todas las duplas aprobadas, ordenadas por ranking general (primero
         # las posicionadas, después el resto por nombre). Con corte global top-N.
         from app.rankings.models import RankingGeneral
+        from app.rankings.service import sort_general_rows
         ranked_pos = {}
         res = await db.execute(
-            select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id).order_by(RankingGeneral.posicion)
+            select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id)
         )
-        for r in res.scalars().all():
+        for r in sort_general_rows(list(res.scalars().all())):
             ranked_pos[r.equipo_id] = r.posicion
         res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id, Equipo.estado == "aprobado"))
         equipos = res.scalars().all()
