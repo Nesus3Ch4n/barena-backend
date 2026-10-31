@@ -149,6 +149,10 @@ async def live_get(partido_id: str, user=Depends(require_roles(*LIVE_ROLES)), db
 
 @router.get("/{partido_id}/live/public", response_model=dict)
 async def live_public(partido_id: str, db: AsyncSession = Depends(get_db)):
+    try:
+        UUID(partido_id)
+    except ValueError:
+        raise AppError(400, "PARTIDO_ID_INVALIDO", "partido_id debe ser un UUID válido", {"partido_id": partido_id})
     return {"success": True, "data": await live_snapshot(db, partido_id), "error": None}
 
 @router.post("/{partido_id}/live", response_model=dict)

@@ -101,6 +101,7 @@ class TorneoUpdate(BaseModel):
     fecha_inicio: Optional[datetime] = None
     fecha_fin: Optional[datetime] = None
     publico: Optional[bool] = None
+    estado: Optional[str] = Field(default=None, pattern="^(borrador|activo|en_curso|finalizado)$")
     deporte_nombre: Optional[str] = Field(default=None, max_length=50)
 
 class RamaUpdate(BaseModel):

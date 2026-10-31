@@ -1,6 +1,6 @@
 import itertools, math, random
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, desc, or_
+from sqlalchemy import select, delete, desc, or_, func
 from app.partidos.models import Partido, SetPartido, PartidoEvento
 from app.torneos.models import Categoria, Grupo, Rama
 from app.equipos.models import Equipo
@@ -668,6 +668,7 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     partido.estado = "finalizado"
     await db.flush()
     await _avanzar_ganador(db, partido)
+    await _sync_estado_torneo(db, partido.categoria_id)
     return partido
 
 async def list_mis_partidos(db: AsyncSession, user_id: str):
@@ -1637,8 +1638,33 @@ async def finalizar_partido(db: AsyncSession, partido_id: str) -> dict:
     partido.tarjetas_rojas_visit = snap["tarjetas"]["visitante"]["rojas"]
     await db.flush()
     await _avanzar_ganador(db, partido)
+    await _sync_estado_torneo(db, partido.categoria_id)
     snap = await live_snapshot(db, partido_id)
     return {"resumen": _resumen_final(partido, snap), "snapshot": snap}
+
+async def _sync_estado_torneo(db: AsyncSession, categoria_id: str) -> None:
+    """Mantiene torneos.estado al día: activo al primer resultado y finalizado
+    cuando ya no queda ningún partido pendiente en el torneo."""
+    from app.torneos.models import Torneo
+    res = await db.execute(
+        select(Rama.torneo_id).join(Categoria, Categoria.rama_id == Rama.id).where(Categoria.id == categoria_id)
+    )
+    torneo_id = res.scalar_one_or_none()
+    if not torneo_id:
+        return
+    res = await db.execute(select(Torneo).where(Torneo.id == str(torneo_id)))
+    torneo = res.scalar_one_or_none()
+    if not torneo or torneo.estado == "finalizado":
+        return
+    res = await db.execute(
+        select(func.count(Partido.id), func.count(Partido.id).filter(Partido.estado == "finalizado"))
+        .join(Categoria, Partido.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id == str(torneo_id))
+    )
+    total, finalizados = res.one()
+    torneo.estado = "finalizado" if total and finalizados == total else "activo"
+    await db.flush()
 
 def _resumen_final(partido: Partido, snap: dict) -> dict:
     return {

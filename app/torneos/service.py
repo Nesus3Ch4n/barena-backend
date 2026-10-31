@@ -1,5 +1,7 @@
 import re
 import uuid
+import unicodedata
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, insert, func
 from sqlalchemy.exc import IntegrityError
@@ -7,11 +9,14 @@ from sqlalchemy.orm import selectinload
 from app.torneos.models import Torneo, Rama, Categoria, Deporte
 from app.torneos.schemas import TorneoCreate, VisibilidadUpdate
 from app.equipos.models import Equipo
+from app.partidos.models import Partido
 from app.shared.errors import AppError, NotFound
 from app.auth.models import user_roles
 
 def slugify(text: str) -> str:
-    slug = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+    # Translitera acentos (Relámpago -> relampago) antes de limpiar.
+    plano = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    slug = re.sub(r'[^a-z0-9]+', '-', plano.lower()).strip('-')
     return slug[:100] or str(uuid.uuid4())[:8]
 
 async def ensure_organizador_role(db: AsyncSession, user_id: str):
@@ -189,6 +194,8 @@ async def update_torneo(db: AsyncSession, torneo_id: str, data) -> Torneo:
         torneo.fecha_fin = upd["fecha_fin"]
     if "publico" in upd and upd["publico"] is not None:
         torneo.publico = upd["publico"]
+    if "estado" in upd and upd["estado"]:
+        torneo.estado = "activo" if upd["estado"] == "en_curso" else upd["estado"]
     if "deporte_nombre" in upd and upd["deporte_nombre"]:
         torneo.deporte_id = await get_deporte_id(db, None, upd["deporte_nombre"])
     await db.flush()
@@ -369,6 +376,22 @@ async def delete_torneo(db: AsyncSession, torneo_id: str):
     await db.delete(torneo)
     await db.flush()
 
+def _estado_publico(torneo: Torneo, total: int = 0, finalizados: int = 0, en_juego: int = 0) -> str:
+    """Estado que ve el público. La DB solo guarda borrador/activo/finalizado;
+    aquí se deriva en vivo para no depender de que alguien lo cambie a mano."""
+    if torneo.estado == "finalizado":
+        return "finalizado"
+    hoy = (datetime.now(timezone.utc) - timedelta(hours=5)).date()
+    ini = torneo.fecha_inicio.date() if torneo.fecha_inicio else None
+    fin = torneo.fecha_fin.date() if torneo.fecha_fin else None
+    if fin and total > 0 and hoy > fin:
+        return "finalizado"
+    if en_juego > 0 or (total > 0 and finalizados > 0):
+        return "activo"
+    if ini and fin and total > 0 and ini <= hoy <= fin:
+        return "activo"
+    return torneo.estado
+
 async def list_torneos_publicos(db: AsyncSession):
     res = await db.execute(select(Torneo).where(Torneo.publico == True).order_by(Torneo.creado_en.desc()))
     torneos = res.scalars().all()
@@ -391,12 +414,25 @@ async def list_torneos_publicos(db: AsyncSession):
     for torneo_id, tipo, nombre in ramas:
         cats_by_torneo.setdefault(torneo_id, []).append({"tipo": tipo, "nombre": nombre})
     equipos_by_torneo = {tid: count for tid, count in equipos}
+    partidos_stats = (await db.execute(
+        select(
+            Rama.torneo_id,
+            func.count(Partido.id),
+            func.count(Partido.id).filter(Partido.estado == "finalizado"),
+            func.count(Partido.id).filter(Partido.estado == "en_juego"),
+        )
+        .join(Categoria, Partido.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id.in_(ids))
+        .group_by(Rama.torneo_id)
+    )).all()
+    stats_by_torneo = {tid: (total, fin, enj) for tid, total, fin, enj in partidos_stats}
     return [{
         "id": t.id, "nombre": t.nombre, "slug": t.slug,
         "ciudad": t.ciudad, "sede": t.sede,
         "fecha_inicio": str(t.fecha_inicio) if t.fecha_inicio else None,
         "fecha_fin": str(t.fecha_fin) if t.fecha_fin else None,
-        "estado": t.estado, "publico": t.publico,
+        "estado": _estado_publico(t, *stats_by_torneo.get(t.id, (0, 0, 0))), "publico": t.publico,
         "categorias": cats_by_torneo.get(t.id, []),
         "equipos": equipos_by_torneo.get(t.id, 0),
     } for t in torneos]
