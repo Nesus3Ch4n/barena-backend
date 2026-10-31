@@ -93,6 +93,7 @@ class VisibilidadUpdate(BaseModel):
     stats_visible: Optional[bool] = None
     ranking_visible: Optional[bool] = None
     publico: Optional[bool] = None
+    imagen_url: Optional[str] = Field(default=None, max_length=500)
 
 class TorneoUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=2, max_length=120)

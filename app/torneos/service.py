@@ -433,6 +433,7 @@ async def list_torneos_publicos(db: AsyncSession):
         "fecha_inicio": str(t.fecha_inicio) if t.fecha_inicio else None,
         "fecha_fin": str(t.fecha_fin) if t.fecha_fin else None,
         "estado": _estado_publico(t, *stats_by_torneo.get(t.id, (0, 0, 0))), "publico": t.publico,
+        "imagen_url": (t.config_visibilidad or {}).get("imagen_url"),
         "categorias": cats_by_torneo.get(t.id, []),
         "equipos": equipos_by_torneo.get(t.id, 0),
     } for t in torneos]

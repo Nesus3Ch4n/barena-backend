@@ -31,7 +31,7 @@ async def listar_torneos(request: Request, user=Depends(get_current_user), db: A
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
     torneos = await list_torneos(db, user.id, is_super, is_org)
-    data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad} for t in torneos]
+    data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad, "imagen_url": (t.config_visibilidad or {}).get("imagen_url")} for t in torneos]
     return {"success": True, "data": data, "error": None}
 
 @router.get("/jueces/buscar", response_model=dict)
@@ -66,8 +66,9 @@ async def rol_juez_torneo(torneo_id: str, user_id: str, body: JuezRolIn, request
     return {"success": True, "data": data, "error": None}
 
 @router.delete("/{torneo_id}/jueces/{user_id}", response_model=dict)
-async def desvincular_juez_torneo(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def desvincular_juez_torneo(torneo_id: str, user_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     _validate_uuid(torneo_id, "torneo_id")
+    _validate_uuid(user_id, "user_id")
     is_super = "super_admin" in getattr(request.state, "roles", [])
     is_org = "organizador" in getattr(request.state, "roles", [])
     data = await desvincular_juez(db, torneo_id, user_id, user.id, is_super, is_org)
@@ -128,7 +129,7 @@ async def detalle_torneo(torneo_id: str, request: Request, user=Depends(get_curr
     ramas_data = []
     for rama, cats in result["ramas"]:
         ramas_data.append({"id": rama.id, "tipo": rama.tipo, "nombre_custom": rama.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "clasificados": getattr(c, "clasificados", None), "criterio_emparejamiento": getattr(c, "criterio_emparejamiento", "directo"), "reglas_partido": getattr(c, "reglas_partido", None) or {}, "clasificacion": getattr(c, "clasificacion", "grupos"), "ranking_general_enabled": getattr(c, "ranking_general_enabled", True), "bracket_tipo": getattr(c, "bracket_tipo", "general"), "diferencia_dos_puntos": getattr(c, "diferencia_dos_puntos", True), "sets_x_partido": c.sets_x_partido, "puntos_x_set": c.puntos_x_set, "criterio_clasif": getattr(c, "criterio_clasif", "PTS>SF>CP>JL")} for c in cats]})
-    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "deporte_id": torneo.deporte_id, "organizador_id": torneo.organizador_id, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "sede": torneo.sede, "ciudad": torneo.ciudad, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad}, "ramas": ramas_data}, "error": None}
+    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "deporte_id": torneo.deporte_id, "organizador_id": torneo.organizador_id, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "sede": torneo.sede, "ciudad": torneo.ciudad, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad, "imagen_url": (torneo.config_visibilidad or {}).get("imagen_url")}, "ramas": ramas_data}, "error": None}
 
 @router.patch("/{torneo_id}/visibilidad", response_model=dict)
 async def patch_visibilidad(torneo_id: str, body: VisibilidadUpdate, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -298,7 +299,7 @@ async def detalle_public_torneo(torneo_id: str, db: AsyncSession = Depends(get_d
     if not torneo.publico:
         raise NotFound("TORNEO_NOT_PUBLIC", "Torneo no es público", {"id": torneo_id})
     ramas_data = [{"id": r.id, "tipo": r.tipo, "nombre_custom": r.nombre_custom, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato, "equipos_x_grupo": c.equipos_x_grupo, "avance_x_grupo": c.avance_x_grupo, "clasificados": getattr(c, "clasificados", None), "criterio_emparejamiento": getattr(c, "criterio_emparejamiento", "directo"), "reglas_partido": getattr(c, "reglas_partido", None) or {}, "clasificacion": getattr(c, "clasificacion", "grupos"), "bracket_tipo": getattr(c, "bracket_tipo", "general"), "sets_x_partido": c.sets_x_partido, "puntos_x_set": c.puntos_x_set, "diferencia_dos_puntos": getattr(c, "diferencia_dos_puntos", True), "ranking_general_enabled": getattr(c, "ranking_general_enabled", True)} for c in cats]} for r, cats in result["ramas"]]
-    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad}, "ramas": ramas_data}, "error": None}
+    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "fecha_fin": str(torneo.fecha_fin) if torneo.fecha_fin else None, "estado": torneo.estado, "publico": torneo.publico, "config_visibilidad": torneo.config_visibilidad, "imagen_url": (torneo.config_visibilidad or {}).get("imagen_url")}, "ramas": ramas_data}, "error": None}
 
 @public_router.get("/torneos/{torneo_id}/equipos", response_model=dict)
 async def equipos_public_torneo(torneo_id: str, categoria_id: str = None, db: AsyncSession = Depends(get_db)):
@@ -336,4 +337,4 @@ async def public_torneo(slug: str, db: AsyncSession = Depends(get_db)):
     # also fetch ramas for public
     result = await get_torneo_detail(db, torneo.id)
     ramas_data = [{"id": r.id, "tipo": r.tipo, "categorias": [{"id": c.id, "nombre": c.nombre, "formato": c.formato} for c in cats]} for r, cats in result["ramas"]]
-    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None}, "ramas": ramas_data}, "error": None}
+    return {"success": True, "data": {"torneo": {"id": torneo.id, "nombre": torneo.nombre, "slug": torneo.slug, "sede": torneo.sede, "ciudad": torneo.ciudad, "fecha_inicio": str(torneo.fecha_inicio) if torneo.fecha_inicio else None, "imagen_url": (torneo.config_visibilidad or {}).get("imagen_url")}, "ramas": ramas_data}, "error": None}
