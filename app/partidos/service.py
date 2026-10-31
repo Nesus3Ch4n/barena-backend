@@ -22,6 +22,26 @@ FASES_ELIMINATORIA = ["treintaidosavos", "dieciseisavos", "octavos", "cuartos", 
 # Nombre de fase según cantidad de llaves de ese nivel (m = llaves).
 FASE_POR_LLAVES = {1: "final", 2: "semi", 4: "cuartos", 8: "octavos", 16: "dieciseisavos", 32: "treintaidosavos"}
 
+async def _deduplicar_partidos_grupo(db: AsyncSession, partidos: list[Partido]) -> int:
+    """Elimina pendientes duplicados del mismo cruce y grupo, conservando
+    el que tiene programación o resultado."""
+    cruces: dict = {}
+    for p in partidos:
+        if not p.equipo_local_id or not p.equipo_visit_id:
+            continue
+        clave = (p.grupo_id, tuple(sorted((p.equipo_local_id, p.equipo_visit_id))))
+        cruces.setdefault(clave, []).append(p)
+    borrados = 0
+    for filas in cruces.values():
+        if len(filas) < 2:
+            continue
+        filas.sort(key=lambda p: (p.estado != "pendiente", bool(p.fecha_hora), bool(p.cancha), bool(p.arbitro_id)), reverse=True)
+        for p in filas[1:]:
+            if p.estado == "pendiente":
+                await db.delete(p)
+                borrados += 1
+    return borrados
+
 def _es_potencia_de_2(n):
     return n != 0 and (n & (n - 1)) == 0
 
@@ -59,7 +79,8 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
     if efectivo_bracket not in ("general", "diamante", "oro", "diamante_oro"):
         efectivo_bracket = "general"
 
-    await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.estado == "pendiente"))
+    if cat.formato == "eliminatoria":
+        await db.execute(delete(Partido).where(Partido.categoria_id == categoria_id, Partido.estado == "pendiente"))
 
     partidos_creados = []
 
@@ -115,10 +136,39 @@ async def generar_fixture(db: AsyncSession, categoria_id: str, bracket_tipo: str
                 eq.grupo_id = grupos[idx % num_grupos].id
         await db.flush()
 
+        # Conserva los partidos existentes (con su programación y resultados)
+        # y crea solo los pares que falten. Nunca duplica un mismo cruce.
+        equipo_ids = {e.id for e in equipos}
+        grupo_ids = {g.id for g in grupos}
+        res = await db.execute(select(Partido).where(
+            Partido.categoria_id == categoria_id,
+            Partido.fase == "grupos",
+        ))
+        existentes = list(res.scalars().all())
+        for p in existentes:
+            if p.estado != "pendiente":
+                continue
+            if p.equipo_local_id not in equipo_ids or p.equipo_visit_id not in equipo_ids or p.grupo_id not in grupo_ids:
+                await db.delete(p)
+        await db.flush()
+        res = await db.execute(select(Partido).where(
+            Partido.categoria_id == categoria_id,
+            Partido.fase == "grupos",
+        ))
+        existentes = list(res.scalars().all())
+        await _deduplicar_partidos_grupo(db, existentes)
+        await db.flush()
+        pares = {
+            (p.grupo_id, tuple(sorted((p.equipo_local_id, p.equipo_visit_id))))
+            for p in existentes
+            if p.equipo_local_id and p.equipo_visit_id
+        }
         for grupo in grupos:
             res = await db.execute(select(Equipo).where(Equipo.grupo_id == grupo.id))
             eqs = res.scalars().all()
             for a, b in itertools.combinations(eqs, 2):
+                if (grupo.id, tuple(sorted((a.id, b.id)))) in pares:
+                    continue
                 p = Partido(categoria_id=categoria_id, grupo_id=grupo.id, fase="grupos", equipo_local_id=a.id, equipo_visit_id=b.id, estado="pendiente", bracket_tipo="general")
                 db.add(p)
                 partidos_creados.append(p)
@@ -213,7 +263,8 @@ async def borrar_partidos_bracket(db: AsyncSession, categoria_id: str) -> int:
 
 async def limpiar_resultados_fase_grupos(db: AsyncSession, categoria_id: str) -> int:
     """Borra sets, eventos y estados de los partidos de grupos, conservando
-    la programación (fecha, cancha, árbitro, grupo y duplas)."""
+    la programación (fecha, cancha, árbitro, grupo y duplas). También elimina
+    cruces duplicados pendientes que hayan quedado de sincronizaciones."""
     res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase == "grupos"))
     partidos = list(res.scalars().all())
     if not partidos:
@@ -237,6 +288,8 @@ async def limpiar_resultados_fase_grupos(db: AsyncSession, categoria_id: str) ->
         p.tarjetas_rojas_local = 0
         p.tarjetas_amarillas_visit = 0
         p.tarjetas_rojas_visit = 0
+    await db.flush()
+    await _deduplicar_partidos_grupo(db, partidos)
     await db.flush()
     await _sync_estado_torneo(db, categoria_id, force=True)
     return limpiados
@@ -286,6 +339,12 @@ async def sincronizar_categoria(db: AsyncSession, categoria_id: str) -> dict:
                 await db.delete(p)
                 partidos_eliminados += 1
         await db.flush()
+        res = await db.execute(select(Partido).where(
+            Partido.categoria_id == categoria_id,
+            Partido.fase == "grupos",
+        ))
+        partidos_eliminados += await _deduplicar_partidos_grupo(db, list(res.scalars().all()))
+        await db.flush()
         # crear pares faltantes por grupo
         for grupo in grupos:
             en_grupo = [e for e in aprobados.values() if e.grupo_id == grupo.id]
@@ -293,7 +352,6 @@ async def sincronizar_categoria(db: AsyncSession, categoria_id: str) -> dict:
                 Partido.categoria_id == categoria_id,
                 Partido.grupo_id == grupo.id,
                 Partido.fase == "grupos",
-                Partido.estado == "pendiente",
             ))
             pares_ok = set()
             for p in res.scalars().all():
