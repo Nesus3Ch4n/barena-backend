@@ -103,10 +103,10 @@ async def get_atleta_resumen(db: AsyncSession, atleta_id: str) -> dict:
                 top = max(elim, key=lambda p: orden_f.get(p.fase, 1))
                 desenlace, fase = "eliminado", top.fase
             else:
-                res = await db.execute(select(RankingGeneral).where(
-                    RankingGeneral.categoria_id == eq.categoria_id,
-                    RankingGeneral.equipo_id == eq.id))
-                rk = res.scalar_one_or_none()
+                from app.rankings.service import sort_general_rows
+                res = await db.execute(select(RankingGeneral).where(RankingGeneral.categoria_id == eq.categoria_id))
+                rk_rows = sort_general_rows(list(res.scalars().all()))
+                rk = next((row for row in rk_rows if row.equipo_id == eq.id), None)
                 res = await db.execute(select(Categoria).where(Categoria.id == eq.categoria_id))
                 cupo = getattr(res.scalar_one_or_none(), "clasificados", None)
                 if rk and cupo and (rk.posicion or 999) > cupo:
