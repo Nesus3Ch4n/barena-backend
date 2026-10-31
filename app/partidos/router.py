@@ -140,8 +140,16 @@ async def mis_partidos(user=Depends(require_roles("juez_anotador", "organizador"
 
 @router.get("/{partido_id}", response_model=dict)
 async def detalle(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.torneos.models import Categoria
     partido, sets = await get_partido(db, partido_id)
-    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha, "observaciones": getattr(partido, "observaciones", None), "tarjetas_amarillas_local": partido.tarjetas_amarillas_local, "tarjetas_rojas_local": partido.tarjetas_rojas_local, "tarjetas_amarillas_visit": partido.tarjetas_amarillas_visit, "tarjetas_rojas_visit": partido.tarjetas_rojas_visit}, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
+    res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
+    cat = res_cat.scalar_one_or_none()
+    categoria = {
+        "sets_x_partido": cat.sets_x_partido,
+        "puntos_x_set": cat.puntos_x_set,
+        "diferencia_dos_puntos": getattr(cat, "diferencia_dos_puntos", True),
+    } if cat else None
+    return {"success": True, "data": {"partido": {"id": partido.id, "estado": partido.estado, "ganador_id": partido.ganador_id, "local": partido.equipo_local_id, "visit": partido.equipo_visit_id, "cancha": partido.cancha, "observaciones": getattr(partido, "observaciones", None), "tarjetas_amarillas_local": partido.tarjetas_amarillas_local, "tarjetas_rojas_local": partido.tarjetas_rojas_local, "tarjetas_amarillas_visit": partido.tarjetas_amarillas_visit, "tarjetas_rojas_visit": partido.tarjetas_rojas_visit}, "categoria": categoria, "sets": [{"numero_set": s.numero_set, "pts_local": s.pts_local, "pts_visitante": s.pts_visitante, "ganador_id": s.ganador_id} for s in sets]}, "error": None}
 
 @router.get("/{partido_id}/qr", response_model=dict)
 async def qr(partido_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):

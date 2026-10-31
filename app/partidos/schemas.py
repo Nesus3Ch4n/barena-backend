@@ -28,8 +28,8 @@ class ProgramarIn(BaseModel):
 
 class SetIn(BaseModel):
     numero_set: int = Field(ge=1, le=5)
-    pts_local: int = Field(ge=0, le=99)
-    pts_visitante: int = Field(ge=0, le=99)
+    pts_local: int = Field(ge=0)
+    pts_visitante: int = Field(ge=0)
     duracion_min: Optional[int] = Field(None, ge=1, le=120)
 
     @field_validator("pts_local", "pts_visitante")

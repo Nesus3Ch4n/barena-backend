@@ -642,7 +642,8 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
     if not cat:
         raise NotFound("CATEGORIA_NOT_FOUND", "Categoria no encontrada")
 
-    # 2-set: tope = puntos configurados, sin alargues
+    # 2-set: resultado abierto; solo se valida empate y, si la categoría lo exige, ventaja de 2.
+    # No se limita el marcador al puntos_x_set: se pueden registrar 21-19, 25-23, 15-14, etc.
     _rg2 = reglas_partido(cat)
     if _rg2["sets_x_partido"] == 2:
         if len(sets) != 2:
@@ -650,19 +651,14 @@ async def registrar_resultado(db: AsyncSession, partido_id: str, sets: list, is_
         numeros = [s["numero_set"] for s in sets]
         if sorted(numeros) != [1, 2]:
             raise AppError(400, "NUMERO_SET_INVALIDO", "Sets deben ser 1 y 2")
-        cap = _rg2["puntos_set"]
         requiere2 = _rg2["dif2"]
         for s in sets:
             w = max(s["pts_local"], s["pts_visitante"])
             l = min(s["pts_local"], s["pts_visitante"])
             if s["pts_local"] == s["pts_visitante"]:
                 raise AppError(400, "SET_EMPATE", "Set no puede empatar")
-            if w != cap:
-                raise AppError(400, "PTS_TOPE", f"Set {s['numero_set']} tope {cap}: ganador debe tener {cap} (sin alargues)")
             if requiere2 and w - l < 2:
-                raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']} a {cap} requiere ventaja de 2 ({cap}-{cap-1} no termina, {cap}-{cap-2} sí)")
-            if w > cap or l >= cap:
-                raise AppError(400, "PTS_TOPE", f"Tope máximo {cap}")
+                raise AppError(400, "PTS_DIFERENCIA", f"Set {s['numero_set']} requiere ventaja de 2 puntos ({w}-{l} no es válido)")
         # Upsert
         for s in sets:
             ganador = partido.equipo_local_id if s["pts_local"] > s["pts_visitante"] else partido.equipo_visit_id
@@ -1218,7 +1214,7 @@ async def live_snapshot(db: AsyncSession, partido_id: str) -> dict:
                 primero_previo = e.lado
         lado_prox = ("visitante" if primero_previo == "local" else "local") if primero_previo else None
         if lado_prox and orden.get(lado_prox):
-            proximo = {"lado": lado_prox, "atleta_id": _servidor(lado_prox)}
+            proximo = {"lado": lado_prox, "atleta_id": _siguiente(lado_prox)}
             if sirviendo is None:
                 saque = dict(proximo)
 
