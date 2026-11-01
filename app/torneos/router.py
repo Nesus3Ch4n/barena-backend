@@ -8,6 +8,7 @@ from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn, ComunicarIn
 from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, get_torneo_publico, requiere_visibilidad, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
 from app.torneos.models import Torneo, Grupo
+from app.torneos.en_vivo import get_centro_en_vivo
 from app.equipos.service import list_equipos
 from app.partidos.service import list_partidos_detalle
 
@@ -290,6 +291,11 @@ async def publicar_fixture(torneo_id: str, request: Request, user=Depends(get_cu
 async def listar_public_torneos(db: AsyncSession = Depends(get_db)):
     data = await list_torneos_publicos(db)
     return {"success": True, "data": data, "error": None}
+
+@public_router.get("/torneos/{torneo_id}/en-vivo", response_model=dict)
+async def centro_en_vivo_public(torneo_id: str, db: AsyncSession = Depends(get_db)):
+    """Centro público de seguimiento en vivo. Acepta UUID o slug y es solo lectura."""
+    return {"success": True, "data": await get_centro_en_vivo(db, torneo_id), "error": None}
 
 @public_router.get("/torneos/{torneo_id}", response_model=dict)
 async def detalle_public_torneo(torneo_id: str, db: AsyncSession = Depends(get_db)):

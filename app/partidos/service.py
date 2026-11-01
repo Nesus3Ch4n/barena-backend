@@ -1,6 +1,6 @@
 import itertools, math, random
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, desc, or_, func
+from sqlalchemy import select, delete, desc, or_, func, text
 from app.partidos.models import Partido, SetPartido, PartidoEvento
 from app.torneos.models import Categoria, Grupo, Rama
 from app.equipos.models import Equipo
@@ -59,6 +59,19 @@ def _seats_por_seed(n):
         prev = list(seats)
         seats = [2 * x for x in prev] + [2 * x - 1 for x in reversed(prev)]
     return seats
+
+def _orden_siembra(n: int) -> list[int]:
+    """Orden oficial de siembra por slot (1-based). Para 16:
+    1,16,8,9,5,12,13,4,2,15,7,10,6,11,14,3 -> O1..O8 alimentan Q1..Q4
+    y la final queda centrada. Para 8/32 se usa el orden balanceado
+    equivalente (1 y 2 solo pueden cruzarse en la final)."""
+    if n == 16:
+        return [1, 16, 8, 9, 5, 12, 13, 4, 2, 15, 7, 10, 6, 11, 14, 3]
+    orden = [1, 2]
+    while len(orden) < max(n, 2):
+        m = len(orden) * 2
+        orden = [x for s in orden for x in (s, m + 1 - s)]
+    return orden[: max(n, 2)]
 
 def _fase_de_llaves(m):
     return FASE_POR_LLAVES.get(m, "ronda")
@@ -382,6 +395,17 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
     clasificados = []
     cupo = getattr(cat, "clasificados", None)
 
+    # Evita generaciones simultáneas de la misma categoría (doble click, dos
+    # pestañas). El lock se libera al terminar la transacción.
+    try:
+        lock = await db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext(:cid))"), {"cid": categoria_id})
+        if lock.scalar() is False:
+            raise AppError(409, "BRACKET_EN_PROCESO", "El bracket de esta categoría se está generando en este momento")
+    except AppError:
+        raise
+    except Exception:
+        pass
+
     if clasificacion == "ranking_general":
         # Todas las duplas aprobadas, ordenadas por ranking general (primero
         # las posicionadas, después el resto por nombre). Con corte global top-N.
@@ -420,9 +444,24 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
         raise AppError(400, "CLASIFICADOS_INSUFICIENTES", "Se necesitan al menos 2 clasificados", {"count": len(clasificados)})
 
     efectivo_bracket = getattr(cat, "bracket_tipo", "general") or "general"
-    # Protección contra duplicados: si ya hay llaves pendientes, exigir confirmación.
-    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(FASES_ELIMINATORIA), Partido.estado == "pendiente"))
-    pendientes_previos = len(res.scalars().all())
+    emp = emparejamiento or getattr(cat, "criterio_emparejamiento", None) or "directo"
+    if emp not in ("directo", "ladder"):
+        emp = "directo"
+
+    # Cualquier llave con resultado, inicio o eventos impide regenerar de forma
+    # destructiva. En ranking_general se repara la siembra conservando resultados.
+    res = await db.execute(select(Partido).where(Partido.categoria_id == categoria_id, Partido.fase.in_(FASES_ELIMINATORIA)))
+    elim_previos = list(res.scalars().all())
+    pendientes_previos = sum(1 for p in elim_previos if p.estado == "pendiente")
+    con_resultado = [p for p in elim_previos if _es_partido_con_historial(p)]
+    if con_resultado:
+        if clasificacion != "ranking_general":
+            raise AppError(409, "BRACKET_CON_RESULTADOS", "El bracket ya tiene partidos jugados o iniciados; no se regenera para no perder resultados", {"con_resultado": len(con_resultado), "pendientes": pendientes_previos})
+        if not confirmar:
+            raise AppError(409, "BRACKET_EN_CURSO", "El bracket ya tiene partidos jugados. Confirme para reparar la siembra sin borrar resultados", {"con_resultado": len(con_resultado), "pendientes": pendientes_previos})
+        reparacion = await _reparar_bracket_oficial(db, cat, clasificados)
+        await db.flush()
+        return [], pendientes_previos, reparacion
     if pendientes_previos and not confirmar:
         raise AppError(409, "BRACKET_YA_GENERADO", "El bracket ya fue generado. Confirme para regenerarlo (se eliminan solo llaves pendientes)", {"pendientes": pendientes_previos})
 # Borrar llaves pendientes previas para regenerar desde cero.
@@ -453,10 +492,18 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
             slots[n - 1] = eqs[n - 1].id
         await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
 
-    emp = emparejamiento or getattr(cat, "criterio_emparejamiento", None) or "directo"
-    if emp not in ("directo", "ladder"):
-        emp = "directo"
-    crear = _crear_directo_para if emp == "directo" else _crear_ladder_para
+    async def _crear_oficial_para(eqs, btype):
+        # Siembra oficial: 1v16, 8v9, 5v12, 13v4, 2v15, 7v10, 6v11, 14v3.
+        # Los seeds sin dupla quedan como BYE y avanzan directo.
+        n = len(eqs)
+        B = _siguiente_pot2(n)
+        slots = [None] * B
+        for pos, seed in enumerate(_orden_siembra(B)):
+            if seed <= n:
+                slots[pos] = eqs[seed - 1].id
+        await _armar_ladder(db, categoria_id, slots, btype, partidos_creados)
+
+    crear = _crear_oficial_para if clasificacion == "ranking_general" else (_crear_directo_para if emp == "directo" else _crear_ladder_para)
     if efectivo_bracket == "diamante_oro":
         mid = (len(clasificados) + 1) // 2
         await crear(clasificados[:mid], "diamante")
@@ -469,8 +516,172 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
         await crear(clasificados, "general")
 
     await db.flush()
-    await _guardar_snapshot(db, categoria_id, cat, clasificados, emp, partidos_creados)
-    return partidos_creados, pendientes_previos
+    await _guardar_snapshot(db, categoria_id, cat, clasificados, "oficial" if clasificacion == "ranking_general" else emp, partidos_creados)
+    return partidos_creados, pendientes_previos, None
+
+def _es_partido_con_historial(p: Partido) -> bool:
+    return p.estado != "pendiente" or p.iniciado_en is not None or p.finalizado_en is not None
+
+
+async def _reparar_bracket_oficial(db: AsyncSession, cat, clasificados_fallback: list) -> dict:
+    """Realinea un bracket ya jugado a la siembra oficial sin borrar resultados.
+
+    La fuente de seeds es la última clasificación congelada (la misma que usó
+    la generación original, antes de que el ranking general sumara las llaves
+    eliminatorias). Solo remapea posiciones de la primera ronda y reconstruye
+    las rondas que siguen pendientes; jamás toca sets, eventos ni ganadores.
+    """
+    from sqlalchemy import text as _text
+    cid = cat.id
+    filas = None
+    try:
+        r = await db.execute(_text("SELECT filas FROM clasificacion_congelada WHERE categoria_id = CAST(:cid AS UUID) ORDER BY creada_en DESC LIMIT 1"), {"cid": cid})
+        row = r.mappings().first()
+        if row and row["filas"]:
+            filas = row["filas"]
+    except Exception:
+        filas = None
+    if filas:
+        teams = [str(x.get("equipo_id")) for x in sorted(filas, key=lambda x: x.get("posicion") or 0) if x.get("equipo_id")]
+    else:
+        # Sin la clasificación congelada no hay forma fiable de recuperar la
+        # siembra original: el ranking actual ya incluye las llaves jugadas.
+        raise AppError(409, "BRACKET_SIN_SIEMBRA", "No hay clasificación congelada para realinear el bracket sin alterar resultados")
+    if len(teams) < 2:
+        raise AppError(409, "BRACKET_SIN_SIEMBRA", "No hay clasificación congelada suficiente para reparar el bracket")
+
+    res = await db.execute(select(Partido).where(Partido.categoria_id == cid, Partido.fase.in_(FASES_ELIMINATORIA)))
+    elim = list(res.scalars().all())
+    tipos = sorted({p.bracket_tipo for p in elim if p.fase != "tercer_puesto"})
+
+    btype_cat = getattr(cat, "bracket_tipo", "general") or "general"
+    if btype_cat == "diamante_oro":
+        mid = (len(teams) + 1) // 2
+        subsets = {"diamante": teams[:mid], "oro": teams[mid:]}
+    elif btype_cat == "diamante":
+        subsets = {"diamante": teams[:(len(teams) + 1) // 2]}
+    elif btype_cat == "oro":
+        subsets = {"oro": teams[(len(teams) + 1) // 2:]}
+    else:
+        subsets = {"general": teams}
+
+    remapeados = 0
+    reconstruidos = 0
+    for btype in tipos:
+        subset = subsets.get(btype) or teams
+        n = len(subset)
+        if n < 2:
+            continue
+        B = _siguiente_pot2(n)
+        slots = [subset[seed - 1] if seed <= n else None for seed in _orden_siembra(B)]
+        partidos_tipo = [p for p in elim if p.bracket_tipo == btype and p.fase != "tercer_puesto"]
+        primera = _fase_de_llaves(B // 2)
+        objetivo = {}
+        for i in range(B // 2):
+            a, b = slots[2 * i], slots[2 * i + 1]
+            if a and b:
+                objetivo[frozenset((a, b))] = i
+        usados: dict[int, Partido] = {}
+        sobrantes = []
+        for p in [x for x in partidos_tipo if x.fase == primera]:
+            key = frozenset(x for x in (p.equipo_local_id, p.equipo_visit_id) if x)
+            idx = objetivo.get(key)
+            if idx is None or idx in usados:
+                sobrantes.append(p)
+                continue
+            usados[idx] = p
+            if p.llave != idx:
+                remapeados += 1
+            if _es_partido_con_historial(p):
+                # Solo cambia la posición en el cuadro; sets y ganador intactos.
+                p.llave = idx
+            else:
+                p.llave = idx
+                p.equipo_local_id = slots[2 * idx]
+                p.equipo_visit_id = slots[2 * idx + 1]
+        for p in sobrantes:
+            if _es_partido_con_historial(p):
+                raise AppError(409, "BRACKET_REPARACION_CONFLICTO", "No se puede realinear una llave jugada que no coincide con la siembra oficial", {"partido_id": p.id, "fase": p.fase, "llave": p.llave})
+            await db.delete(p)
+        for i in range(B // 2):
+            if i in usados:
+                continue
+            a, b = slots[2 * i], slots[2 * i + 1]
+            if a and b:
+                np = Partido(categoria_id=cid, fase=primera, llave=i, equipo_local_id=a, equipo_visit_id=b, estado="pendiente", bracket_tipo=btype)
+                db.add(np)
+                usados[i] = np
+                partidos_tipo.append(np)
+                reconstruidos += 1
+        cur = []
+        for i in range(B // 2):
+            a, b = slots[2 * i], slots[2 * i + 1]
+            p = usados.get(i)
+            if p is not None and p.estado == "finalizado" and p.ganador_id:
+                cur.append(p.ganador_id)
+            elif a and b:
+                cur.append(None)
+            else:
+                cur.append(a or b)
+
+        while len(cur) > 1:
+            m = len(cur) // 2
+            fase = _fase_de_llaves(m)
+            expected = [(cur[2 * j], cur[2 * j + 1]) for j in range(m)]
+            existentes = [p for p in partidos_tipo if p.fase == fase]
+            usados_ronda: set[int] = set()
+            siguiente = []
+            for j, (a, b) in enumerate(expected):
+                cand = None
+                for p in existentes:
+                    if id(p) in usados_ronda:
+                        continue
+                    actual = frozenset(x for x in (p.equipo_local_id, p.equipo_visit_id) if x)
+                    esperado = frozenset(x for x in (a, b) if x)
+                    if esperado and actual == esperado:
+                        cand = p
+                        break
+                if cand is None:
+                    for p in existentes:
+                        if id(p) in usados_ronda:
+                            continue
+                        if (p.llave or 0) == j:
+                            cand = p
+                            break
+                if cand is not None:
+                    usados_ronda.add(id(cand))
+                    if _es_partido_con_historial(cand):
+                        actual = frozenset(x for x in (cand.equipo_local_id, cand.equipo_visit_id) if x)
+                        esperado = frozenset(x for x in (a, b) if x)
+                        if esperado and actual != esperado:
+                            raise AppError(409, "BRACKET_REPARACION_CONFLICTO", "Una llave jugada no coincide con la siembra oficial", {"partido_id": cand.id, "fase": cand.fase, "llave": cand.llave})
+                    else:
+                        cand.equipo_local_id = a
+                        cand.equipo_visit_id = b
+                        cand.llave = j
+                    if cand.estado == "finalizado" and cand.ganador_id:
+                        siguiente.append(cand.ganador_id)
+                    elif a and b:
+                        siguiente.append(None)
+                    else:
+                        siguiente.append(a or b)
+                elif a or b:
+                    np = Partido(categoria_id=cid, fase=fase, llave=j, equipo_local_id=a, equipo_visit_id=b, estado="pendiente", bracket_tipo=btype)
+                    db.add(np)
+                    partidos_tipo.append(np)
+                    siguiente.append(a or b)
+                    reconstruidos += 1
+                else:
+                    siguiente.append(None)
+            for p in existentes:
+                if id(p) in usados_ronda:
+                    continue
+                if _es_partido_con_historial(p):
+                    raise AppError(409, "BRACKET_REPARACION_CONFLICTO", "Hay una llave jugada fuera de la siembra oficial", {"partido_id": p.id, "fase": p.fase, "llave": p.llave})
+                await db.delete(p)
+            cur = siguiente
+    return {"remapeados": remapeados, "reconstruidos": reconstruidos}
+
 
 async def _guardar_snapshot(db: AsyncSession, categoria_id: str, cat, clasificados: list, emparejamiento: str, partidos: list) -> None:
     """Congela la clasificación usada al avanzar. Nunca falla el avanzar (tabla opcional)."""

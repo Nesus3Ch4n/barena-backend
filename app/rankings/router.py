@@ -95,7 +95,14 @@ async def general(categoria_id: str, user=Depends(get_optional_user), db: AsyncS
     await _exigir_posiciones(db, await _torneo_de_categoria(db, categoria_id), user)
     data = await list_rankings_general(db, categoria_id)
     nombres = await _equipo_nombres(db, [r.equipo_id for r in data])
-    return {"success": True, "data": [{**_general_full(r), "equipo_nombre": nombres.get(r.equipo_id, "Equipo")} for r in data], "error": None}
+    ids = [r.equipo_id for r in data if r.equipo_id]
+    equipo_grupo = {}
+    if ids:
+        res = await db.execute(select(Equipo.id, Equipo.grupo_id).where(Equipo.id.in_(ids)))
+        equipo_grupo = {eid: gid for eid, gid in res.all()}
+    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id))
+    gnames = {g.id: g.nombre for g in res.scalars()}
+    return {"success": True, "data": [{**_general_full(r), "equipo_nombre": nombres.get(r.equipo_id, "Equipo"), "grupo_id": equipo_grupo.get(r.equipo_id), "grupo_nombre": gnames.get(equipo_grupo.get(r.equipo_id))} for r in data], "error": None}
 
 
 @torneo_router.get("", response_model=dict)

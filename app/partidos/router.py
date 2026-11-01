@@ -60,8 +60,8 @@ async def eliminar_grupo_endpoint(categoria_id: str, grupo_id: str, request: Req
 @categoria_fixture_router.post("/avanzar-bracket", response_model=dict)
 async def avanzar_bracket(categoria_id: str, body: AvanzarIn = None, request: Request = None, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
     await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
-    partidos, pendientes_previos = await generar_bracket_desde_ranking(db, categoria_id, (body.confirmar if body else False), (body.emparejamiento if body else None))
-    return {"success": True, "data": {"generados": len(partidos), "ya_existia": pendientes_previos > 0, "partidos": [{"id": p.id, "fase": p.fase, "llave": p.llave, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
+    partidos, pendientes_previos, reparacion = await generar_bracket_desde_ranking(db, categoria_id, (body.confirmar if body else False), (body.emparejamiento if body else None))
+    return {"success": True, "data": {"generados": len(partidos), "ya_existia": pendientes_previos > 0, "reparado": reparacion is not None, "reparacion": reparacion, "partidos": [{"id": p.id, "fase": p.fase, "llave": p.llave, "local": p.equipo_local_id, "visit": p.equipo_visit_id, "bracket_tipo": p.bracket_tipo} for p in partidos]}, "error": None}
 
 @categoria_fixture_router.post("/partidos/grupos/limpiar-resultados", response_model=dict)
 async def limpiar_resultados_grupos(categoria_id: str, request: Request, user=Depends(require_roles("organizador", "super_admin")), db: AsyncSession = Depends(get_db)):
