@@ -661,15 +661,15 @@ async def _reparar_bracket_oficial(db: AsyncSession, cat, clasificados_fallback:
                         cand.llave = j
                     if cand.estado == "finalizado" and cand.ganador_id:
                         siguiente.append(cand.ganador_id)
-                    elif a and b:
-                        siguiente.append(None)
                     else:
-                        siguiente.append(a or b)
+                        # Un partido pendiente no adelanta a nadie a la
+                        # siguiente ronda, aunque ya tenga un participante.
+                        siguiente.append(None)
                 elif a or b:
                     np = Partido(categoria_id=cid, fase=fase, llave=j, equipo_local_id=a, equipo_visit_id=b, estado="pendiente", bracket_tipo=btype)
                     db.add(np)
                     partidos_tipo.append(np)
-                    siguiente.append(a or b)
+                    siguiente.append(None)
                     reconstruidos += 1
                 else:
                     siguiente.append(None)
@@ -759,39 +759,37 @@ async def _avanzar_ganador(db: AsyncSession, partido: Partido):
             return
         res_cat = await db.execute(select(Categoria).where(Categoria.id == partido.categoria_id))
         cat_t = res_cat.scalar_one_or_none()
-        if not getattr(cat_t, "cuadro_perdedores", False):
-            return
-        res = await db.execute(
-            select(Partido).where(
-                Partido.categoria_id == partido.categoria_id,
-                Partido.fase == "semi",
-                Partido.llave == (1 - llave),
+        if getattr(cat_t, "cuadro_perdedores", False):
+            res = await db.execute(
+                select(Partido).where(
+                    Partido.categoria_id == partido.categoria_id,
+                    Partido.fase == "semi",
+                    Partido.llave == (1 - llave),
+                )
             )
-        )
-        gemela = res.scalar_one_or_none()
-        # solo tiene sentido el 3er puesto si la semi gemela es un partido real
-        if not gemela or not gemela.equipo_local_id or not gemela.equipo_visit_id:
-            return
-        perdedor = partido.equipo_visit_id if partido.ganador_id == partido.equipo_local_id else partido.equipo_local_id
-        res2 = await db.execute(
-            select(Partido).where(
-                Partido.categoria_id == partido.categoria_id,
-                Partido.fase == "tercer_puesto",
-                Partido.bracket_tipo == partido.bracket_tipo,
-            )
-        )
-        tercer = res2.scalars().first()
-        if not tercer:
-            tercer = Partido(categoria_id=partido.categoria_id, fase="tercer_puesto", llave=0, equipo_local_id=None, equipo_visit_id=None, estado="pendiente", bracket_tipo=partido.bracket_tipo)
-            db.add(tercer)
-        if llave % 2 == 0:
-            if tercer.equipo_local_id is None:
-                tercer.equipo_local_id = perdedor
-        else:
-            if tercer.equipo_visit_id is None:
-                tercer.equipo_visit_id = perdedor
-        await db.flush()
-        return
+            gemela = res.scalar_one_or_none()
+            # solo tiene sentido el 3er puesto si la semi gemela es un partido real
+            if gemela and gemela.equipo_local_id and gemela.equipo_visit_id:
+                perdedor = partido.equipo_visit_id if partido.ganador_id == partido.equipo_local_id else partido.equipo_local_id
+                res2 = await db.execute(
+                    select(Partido).where(
+                        Partido.categoria_id == partido.categoria_id,
+                        Partido.fase == "tercer_puesto",
+                        Partido.bracket_tipo == partido.bracket_tipo,
+                    )
+                )
+                tercer = res2.scalars().first()
+                if not tercer:
+                    tercer = Partido(categoria_id=partido.categoria_id, fase="tercer_puesto", llave=0, equipo_local_id=None, equipo_visit_id=None, estado="pendiente", bracket_tipo=partido.bracket_tipo)
+                    db.add(tercer)
+                if llave % 2 == 0:
+                    if tercer.equipo_local_id is None:
+                        tercer.equipo_local_id = perdedor
+                else:
+                    if tercer.equipo_visit_id is None:
+                        tercer.equipo_visit_id = perdedor
+                await db.flush()
+        # El ganador de la semi siempre debe avanzar a la final.
 
     next_fase = NEXT_FASE[partido.fase]
     next_llave = llave // 2
