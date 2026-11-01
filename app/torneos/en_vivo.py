@@ -345,12 +345,12 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
         _partido_card(p, numero[p["id"]], categorias, grupos, nombres, atletas_por_equipo, meta.get(p["id"], {}))
         for p in programados[:15]
     ]
-    # Si aún no hay horarios, mostrar los pendientes que al menos tengan cancha.
+    # Si aún no hay horarios, mostrar los pendientes sin programar.
     if not proximos:
-        con_cancha = sorted([p for p in sin_programar if p.get("cancha")], key=lambda p: ((p.get("cancha") or "").lower(), numero[p["id"]]))
+        sin_hora = sorted(sin_programar, key=lambda p: ((p.get("cancha") or "").lower(), numero[p["id"]]))
         proximos = [
             _partido_card(p, numero[p["id"]], categorias, grupos, nombres, atletas_por_equipo, meta.get(p["id"], {}))
-            for p in con_cancha[:15]
+            for p in sin_hora[:15]
         ]
 
     # ---- Finalizados (ticker e historial) ----
@@ -457,7 +457,7 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
     estado = _estado_publico(torneo, total, finalizados_n, len(vivos))
 
     fase_actual = None
-    for p in (vivos or programados):
+    for p in (vivos or programados or pendientes or finalizados):
         fase_actual = p.get("fase")
         break
     if not fase_actual and finalizados:
