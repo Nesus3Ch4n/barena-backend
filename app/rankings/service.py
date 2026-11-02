@@ -1,56 +1,15 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.rankings.models import RankingGrupo, RankingGeneral
-from app.shared.errors import NotFound
 
-async def list_rankings_grupo(db: AsyncSession, grupo_id: str):
-    res = await db.execute(select(RankingGrupo).where(RankingGrupo.grupo_id == grupo_id).order_by(RankingGrupo.posicion))
-    return res.scalars().all()
-
-async def list_rankings_categoria_grupo(db: AsyncSession, categoria_id: str):
-    # necesita join grupos
-    from app.torneos.models import Grupo
-    res = await db.execute(select(RankingGrupo).join(Grupo, RankingGrupo.grupo_id == Grupo.id).where(Grupo.categoria_id == categoria_id).order_by(Grupo.nombre, RankingGrupo.posicion))
-    return res.scalars().all()
-
-def sort_general_rows(rows: list) -> list:
-    """Ordena la tabla general por partidos ganados y cociente de puntos.
-    El cociente de sets queda deshabilitado; CP sí se usa para desempatar."""
-    def cp(r):
-        contra = r.puntos_contra or 0
-        favor = r.puntos_favor or 0
-        if contra == 0:
-            return 999999 if favor > 0 else 0
-        return favor / contra
-
-    rows.sort(key=lambda r: (-(r.pg or 0), -cp(r), -(r.puntos_favor or 0), str(r.equipo_id)))
-    for pos, row in enumerate(rows, start=1):
-        row.posicion = pos
-    return rows
-
-
-async def list_rankings_general(db: AsyncSession, categoria_id: str):
-    res = await db.execute(select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id))
-    rows = list(res.scalars().all())
-    if not rows:
-        return []
-    return sort_general_rows(rows)
-
-async def list_rankings_torneo(db: AsyncSession, torneo_id: str):
-    from app.torneos.models import Rama, Categoria
-    # todos los rankings del torneo, reordenados por categoría con PG > CP
-    res = await db.execute(select(RankingGeneral).join(Categoria, RankingGeneral.categoria_id == Categoria.id).join(Rama, Categoria.rama_id == Rama.id).where(Rama.torneo_id == torneo_id))
-    rows = list(res.scalars().all())
-    por_categoria: dict = {}
-    for row in rows:
-        por_categoria.setdefault(row.categoria_id, []).append(row)
-    out = []
-    for cat_rows in por_categoria.values():
-        out.extend(sort_general_rows(cat_rows))
-    return out
 
 async def global_ranking(db: AsyncSession, limit: int = 50):
-    """Ranking global del circuito: suma pts de rankings_general por dupla de atletas."""
+    """Ranking global del circuito: suma pts de rankings_general por dupla de atletas.
+
+    Los puntos de clasificación (pts) no dependen del orden de criterios; solo
+    las posiciones. Por eso este ranking de circuito puede seguir usando la
+    caché rankings_general, que los triggers mantienen al registrar resultados.
+    """
+    from app.rankings.models import RankingGeneral
     from app.torneos.models import Rama, Categoria, Torneo
     from app.equipos.models import Equipo
     from app.atletas.models import Atleta

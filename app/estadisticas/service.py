@@ -58,7 +58,6 @@ async def get_atleta_resumen(db: AsyncSession, atleta_id: str) -> dict:
     from app.equipos.models import Equipo
     from app.torneos.models import Categoria, Rama, Torneo
     from app.partidos.models import Partido, PartidoEvento
-    from app.rankings.models import RankingGeneral
     base = await get_atleta_stats(db, atleta_id)
     res = await db.execute(select(Atleta).where(Atleta.id == atleta_id))
     atl = res.scalar_one_or_none()
@@ -103,13 +102,12 @@ async def get_atleta_resumen(db: AsyncSession, atleta_id: str) -> dict:
                 top = max(elim, key=lambda p: orden_f.get(p.fase, 1))
                 desenlace, fase = "eliminado", top.fase
             else:
-                from app.rankings.service import sort_general_rows
-                res = await db.execute(select(RankingGeneral).where(RankingGeneral.categoria_id == eq.categoria_id))
-                rk_rows = sort_general_rows(list(res.scalars().all()))
-                rk = next((row for row in rk_rows if row.equipo_id == eq.id), None)
+                from app.rankings.engine import compute_general_rankings
+                rows = await compute_general_rankings(db, eq.categoria_id)
+                rk = next((row for row in rows if row["equipo_id"] == str(eq.id)), None)
                 res = await db.execute(select(Categoria).where(Categoria.id == eq.categoria_id))
                 cupo = getattr(res.scalar_one_or_none(), "clasificados", None)
-                if rk and cupo and (rk.posicion or 999) > cupo:
+                if rk and cupo and (rk["posicion"] or 999) > cupo:
                     desenlace = "no_clasificado"
         torneos.append({"equipo_id": eq.id, "equipo_nombre": eq.nombre, "torneo": tor_nom,
                         "categoria_id": eq.categoria_id, "desenlace": desenlace, "fase": fase,

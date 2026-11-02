@@ -5,10 +5,11 @@ from sqlalchemy import select
 from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
-from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn, ComunicarIn
+from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn, ComunicarIn, ClasificacionIn
 from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, get_torneo_publico, requiere_visibilidad, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
 from app.torneos.models import Torneo, Grupo
 from app.torneos.en_vivo import get_centro_en_vivo
+from app.torneos.clasificacion import get_clasificacion, guardar_clasificacion
 from app.equipos.service import list_equipos
 from app.partidos.service import list_partidos_detalle
 
@@ -33,6 +34,33 @@ async def listar_torneos(request: Request, user=Depends(get_current_user), db: A
     is_org = "organizador" in getattr(request.state, "roles", [])
     torneos = await list_torneos(db, user.id, is_super, is_org)
     data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad, "imagen_url": (t.config_visibilidad or {}).get("imagen_url")} for t in torneos]
+    return {"success": True, "data": data, "error": None}
+
+@router.get("/{torneo_id}/clasificacion", response_model=dict)
+async def obtener_clasificacion(torneo_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    if not is_super and not is_org:
+        raise Forbidden("Solo el organizador puede ver esta configuración")
+    return {"success": True, "data": get_clasificacion(torneo), "error": None}
+
+@router.put("/{torneo_id}/clasificacion", response_model=dict)
+async def actualizar_clasificacion(torneo_id: str, body: ClasificacionIn, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _validate_uuid(torneo_id, "torneo_id")
+    res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
+    torneo = res.scalar_one_or_none()
+    if not torneo:
+        raise NotFound("TORNEO_NOT_FOUND", "Torneo no existe", {"id": torneo_id})
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    is_org = "organizador" in getattr(request.state, "roles", [])
+    if not is_super and not is_org:
+        raise Forbidden("No eres organizador de este torneo")
+    data = await guardar_clasificacion(db, torneo, user.id, body.criterios)
     return {"success": True, "data": data, "error": None}
 
 @router.get("/jueces/buscar", response_model=dict)

@@ -406,37 +406,30 @@ async def generar_bracket_desde_ranking(db: AsyncSession, categoria_id: str, con
     except Exception:
         pass
 
+    from app.rankings.engine import compute_general_rankings, compute_group_rankings
+    res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id, Equipo.estado == "aprobado"))
+    equipos_por_id = {str(e.id): e for e in res.scalars().all()}
+
     if clasificacion == "ranking_general":
-        # Todas las duplas aprobadas, ordenadas por ranking general (primero
-        # las posicionadas, después el resto por nombre). Con corte global top-N.
-        from app.rankings.models import RankingGeneral
-        from app.rankings.service import sort_general_rows
-        ranked_pos = {}
-        res = await db.execute(
-            select(RankingGeneral).where(RankingGeneral.categoria_id == categoria_id)
-        )
-        for r in sort_general_rows(list(res.scalars().all())):
-            ranked_pos[r.equipo_id] = r.posicion
-        res = await db.execute(select(Equipo).where(Equipo.categoria_id == categoria_id, Equipo.estado == "aprobado"))
-        equipos = res.scalars().all()
-        clasificados = sorted(equipos, key=lambda e: (ranked_pos.get(e.id, 10 ** 9), e.nombre))
+        # Motor dinámico: usa los criterios configurados en el torneo.
+        rows = await compute_general_rankings(db, categoria_id)
+        clasificados = [equipos_por_id[r["equipo_id"]] for r in rows if r["equipo_id"] in equipos_por_id]
         if cupo and cupo > 0:
             clasificados = clasificados[:cupo]
     else:
-        # Clasificación por grupos: los avance_x_grupo primeros de cada grupo.
+        # Clasificación por grupos: los avance_x_grupo primeros de cada grupo
+        # según el motor dinámico del torneo.
         res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
         grupos = res.scalars().all()
         if not grupos:
             raise AppError(400, "SIN_GRUPOS", "No hay grupos en la categoria")
-        from app.rankings.models import RankingGrupo
+        rows = await compute_group_rankings(db, categoria_id)
+        por_grupo: dict[str, list] = {}
+        for r in rows:
+            por_grupo.setdefault(r["grupo_id"], []).append(r)
         for grupo in grupos:
-            res = await db.execute(
-                select(RankingGrupo).where(RankingGrupo.grupo_id == grupo.id).order_by(RankingGrupo.posicion)
-            )
-            ranks = res.scalars().all()
-            for r in ranks[: cat.avance_x_grupo]:
-                eq_res = await db.execute(select(Equipo).where(Equipo.id == r.equipo_id))
-                eq = eq_res.scalar_one_or_none()
+            for r in por_grupo.get(str(grupo.id), [])[: cat.avance_x_grupo]:
+                eq = equipos_por_id.get(r["equipo_id"])
                 if eq:
                     clasificados.append(eq)
 

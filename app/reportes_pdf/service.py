@@ -205,7 +205,7 @@ def _pdf_perfil_juez(d: dict, uid: str):
 
 async def _pdf_evento(db: AsyncSession, tipo: str, torneo_id: str):
     from app.torneos.service import get_torneo_detail
-    from app.rankings.service import list_rankings_categoria_grupo, list_rankings_general
+    from app.rankings.engine import compute_general_rankings
     det = await get_torneo_detail(db, torneo_id)
     tor = det["torneo"]
     cuerpo: list = []
@@ -215,14 +215,11 @@ async def _pdf_evento(db: AsyncSession, tipo: str, torneo_id: str):
     for rama, cats in det["ramas"]:
         for cat in cats:
             cuerpo.append(Paragraph(f"{rama.tipo} · {cat.nombre}", EST_H2))
-            rg = await list_rankings_general(db, cat.id)
+            rg = await compute_general_rankings(db, cat.id)
             if rg:
-                from app.equipos.models import Equipo
-                res_eq = await db.execute(select(Equipo).where(Equipo.id.in_([r.equipo_id for r in rg])))
-                _noms = {e.id: e.nombre for e in res_eq.scalars().all()}
                 filas = [["Pos", "Dupla", "PJ", "PG", "Pts"]]
                 for r in rg[:16]:
-                    filas.append([r.posicion, (_noms.get(r.equipo_id, "Equipo"))[:34], r.pj, r.pg, r.pts])
+                    filas.append([r["posicion"], (r["equipo_nombre"] or "Equipo")[:34], r["pj"], r["pg"], r["pts"]])
                 cuerpo.append(_tabla(filas, [40, 220, 40, 40, 40]))
             else:
                 cuerpo.append(Paragraph("Sin clasificación todavía.", EST_TXT))

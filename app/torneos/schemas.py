@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 from datetime import date, datetime
 
 class CategoriaIn(BaseModel):
@@ -85,6 +85,10 @@ class ComunicarIn(BaseModel):
     destino: str = Field(default="atletas", pattern="^(atletas|jueces|todos)$")
     titulo: str = Field(min_length=2, max_length=120)
     mensaje: str = Field(default="", max_length=2000)
+
+class ClasificacionIn(BaseModel):
+    criterios: List[Literal["puntos", "sets", "puntos_partido"]] = Field(min_length=1, max_length=3)
+
 
 class VisibilidadUpdate(BaseModel):
     fixture_visible: Optional[bool] = None

@@ -1,11 +1,17 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.shared.database import get_db
 from app.shared.security import get_optional_user
 from app.shared.errors import NotFound
-from app.rankings.service import list_rankings_grupo, list_rankings_categoria_grupo, list_rankings_general, list_rankings_torneo, global_ranking
-from app.equipos.models import Equipo
+from app.rankings.engine import (
+    compute_group_ranking,
+    compute_group_rankings,
+    compute_general_rankings,
+    compute_tournament_rankings,
+)
+from app.rankings.service import global_ranking
 from app.torneos.models import Grupo, Rama, Categoria, Torneo
 from app.torneos.service import requiere_visibilidad
 
@@ -40,77 +46,34 @@ async def _exigir_posiciones(db: AsyncSession, torneo_id, user) -> None:
     requiere_visibilidad(torneo, "posiciones_visible", "ranking_visible")
 
 
-async def _equipo_nombres(db: AsyncSession, ids: list):
-    ids = [i for i in ids if i]
-    if not ids:
-        return {}
-    res = await db.execute(select(Equipo).where(Equipo.id.in_(ids)))
-    return {r.id: r.nombre for r in res.scalars()}
-
-
-def _grupo_full(r):
-    return {
-        "equipo_id": r.equipo_id,
-        "pj": r.pj, "pg": r.pg, "pe": r.pe, "pp": r.pp,
-        "pts": r.pts,
-        "sets_favor": r.sets_favor, "sets_contra": r.sets_contra,
-        "puntos_favor": r.puntos_favor, "puntos_contra": r.puntos_contra,
-        "sanciones": r.sanciones, "posicion": r.posicion,
-    }
-
-
-def _general_full(r):
-    return {
-        "equipo_id": r.equipo_id,
-        "pj": r.pj, "pg": r.pg, "pe": r.pe, "pp": r.pp,
-        "pts": r.pts,
-        "sets_favor": getattr(r, "sets_favor", 0) or 0,
-        "sets_contra": getattr(r, "sets_contra", 0) or 0,
-        "puntos_favor": getattr(r, "puntos_favor", 0) or 0,
-        "puntos_contra": getattr(r, "puntos_contra", 0) or 0,
-        "sanciones": r.sanciones, "posicion": r.posicion,
-    }
-
-
 @router.get("/grupo/{grupo_id}", response_model=dict)
 async def grupo(grupo_id: str, user=Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
-    await _exigir_posiciones(db, await _torneo_de_grupo(db, grupo_id), user)
-    data = await list_rankings_grupo(db, grupo_id)
-    nombres = await _equipo_nombres(db, [r.equipo_id for r in data])
-    return {"success": True, "data": [{**_grupo_full(r), "equipo_nombre": nombres.get(r.equipo_id, "Equipo")} for r in data], "error": None}
+    torneo_id = await _torneo_de_grupo(db, grupo_id)
+    await _exigir_posiciones(db, torneo_id, user)
+    data = await compute_group_ranking(db, grupo_id)
+    return {"success": True, "data": data, "error": None}
 
 
 @categoria_router.get("/grupo", response_model=dict)
 async def categoria_grupo(categoria_id: str, user=Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
     await _exigir_posiciones(db, await _torneo_de_categoria(db, categoria_id), user)
-    data = await list_rankings_categoria_grupo(db, categoria_id)
-    nombres = await _equipo_nombres(db, [r.equipo_id for r in data])
-    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id))
-    gnames = {g.id: g.nombre for g in res.scalars()}
-    return {"success": True, "data": [{**_grupo_full(r), "grupo_id": r.grupo_id, "grupo_nombre": gnames.get(r.grupo_id, r.grupo_id), "equipo_nombre": nombres.get(r.equipo_id, "Equipo")} for r in data], "error": None}
+    data = await compute_group_rankings(db, categoria_id)
+    return {"success": True, "data": data, "error": None}
 
 
 @categoria_router.get("/general", response_model=dict)
 async def general(categoria_id: str, user=Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
-    await _exigir_posiciones(db, await _torneo_de_categoria(db, categoria_id), user)
-    data = await list_rankings_general(db, categoria_id)
-    nombres = await _equipo_nombres(db, [r.equipo_id for r in data])
-    ids = [r.equipo_id for r in data if r.equipo_id]
-    equipo_grupo = {}
-    if ids:
-        res = await db.execute(select(Equipo.id, Equipo.grupo_id).where(Equipo.id.in_(ids)))
-        equipo_grupo = {eid: gid for eid, gid in res.all()}
-    res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id))
-    gnames = {g.id: g.nombre for g in res.scalars()}
-    return {"success": True, "data": [{**_general_full(r), "equipo_nombre": nombres.get(r.equipo_id, "Equipo"), "grupo_id": equipo_grupo.get(r.equipo_id), "grupo_nombre": gnames.get(equipo_grupo.get(r.equipo_id))} for r in data], "error": None}
+    torneo_id = await _torneo_de_categoria(db, categoria_id)
+    await _exigir_posiciones(db, torneo_id, user)
+    data = await compute_general_rankings(db, categoria_id)
+    return {"success": True, "data": data, "error": None}
 
 
 @torneo_router.get("", response_model=dict)
 async def torneo_rankings(torneo_id: str, user=Depends(get_optional_user), db: AsyncSession = Depends(get_db)):
     await _exigir_posiciones(db, torneo_id, user)
-    data = await list_rankings_torneo(db, torneo_id)
-    nombres = await _equipo_nombres(db, [r.equipo_id for r in data])
-    return {"success": True, "data": [{"categoria_id": r.categoria_id, "equipo_id": r.equipo_id, "equipo_nombre": nombres.get(r.equipo_id, "Equipo"), "posicion": r.posicion} for r in data], "error": None}
+    data = await compute_tournament_rankings(db, torneo_id)
+    return {"success": True, "data": data, "error": None}
 
 
 @global_router.get("", response_model=dict)
