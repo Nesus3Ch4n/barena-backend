@@ -56,7 +56,7 @@ async def mis_duplas(db: AsyncSession, user_id: str):
         eq = res2.scalar_one_or_none()
         if not eq:
             continue
-        cat_nom, tor_nom, tor_id, tor_fecha = None, None, None, None
+        cat_nom, tor_nom, tor_id, tor_fecha, tor_estado = None, None, None, None, None
         res3 = await db.execute(select(Categoria).where(Categoria.id == eq.categoria_id))
         cat = res3.scalar_one_or_none()
         if cat:
@@ -69,6 +69,7 @@ async def mis_duplas(db: AsyncSession, user_id: str):
                 if tor:
                     tor_nom, tor_id = tor.nombre, str(tor.id)
                     tor_fecha = tor.fecha_inicio.isoformat() if tor.fecha_inicio else None
+                    tor_estado = tor.estado
         res6 = await db.execute(
             select(Partido).where(
                 ((Partido.equipo_local_id == eq.id) | (Partido.equipo_visit_id == eq.id)),
@@ -152,6 +153,7 @@ async def mis_duplas(db: AsyncSession, user_id: str):
             "equipo_id": eq.id, "equipo_nombre": eq.nombre, "estado_equipo": eq.estado,
             "categoria_id": str(eq.categoria_id), "categoria_nombre": cat_nom,
             "torneo_id": tor_id, "torneo_nombre": tor_nom, "torneo_fecha": tor_fecha,
+            "torneo_estado": tor_estado,
             "en_vivo": vivos, "proximos": proximos, "finalizados": finalizados,
         })
     return out
