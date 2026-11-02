@@ -222,7 +222,8 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
     ver_fixture = bool(vis.get("fixture_visible"))
     ver_posiciones = bool(vis.get("posiciones_visible") or vis.get("ranking_visible"))
     ver_ranking = bool(vis.get("ranking_visible"))
-    criterio_torneo = criterios_label(criterios_de_torneo(torneo))
+    criterios_torneo = criterios_de_torneo(torneo)
+    criterio_torneo = criterios_label(criterios_torneo)
     ahora = _ahora()
 
     # Categorías y grupos del torneo (nombres y reglas para mostrar).
@@ -482,6 +483,7 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
             "estado": estado,
             "publico": torneo.publico,
         },
+        "criterios": criterios_torneo,
         "secciones": {
             "fixture": ver_fixture,
             "grupos": bool(vis.get("grupos_visible")),
