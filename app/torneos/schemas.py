@@ -86,8 +86,15 @@ class ComunicarIn(BaseModel):
     titulo: str = Field(min_length=2, max_length=120)
     mensaje: str = Field(default="", max_length=2000)
 
+class PuntosClasificacionIn(BaseModel):
+    ganado: int = Field(default=3, ge=0, le=100)
+    empatado: int = Field(default=2, ge=0, le=100)
+    perdido: int = Field(default=1, ge=0, le=100)
+
+
 class ClasificacionIn(BaseModel):
     criterios: List[Literal["puntos", "sets", "puntos_partido"]] = Field(min_length=1, max_length=3)
+    puntos: PuntosClasificacionIn = Field(default_factory=PuntosClasificacionIn)
 
 
 class VisibilidadUpdate(BaseModel):

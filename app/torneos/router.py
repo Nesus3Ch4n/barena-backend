@@ -60,7 +60,7 @@ async def actualizar_clasificacion(torneo_id: str, body: ClasificacionIn, reques
     is_org = "organizador" in getattr(request.state, "roles", [])
     if not is_super and not is_org:
         raise Forbidden("No eres organizador de este torneo")
-    data = await guardar_clasificacion(db, torneo, user.id, body.criterios)
+    data = await guardar_clasificacion(db, torneo, user.id, body.criterios, body.puntos.model_dump())
     return {"success": True, "data": data, "error": None}
 
 @router.get("/jueces/buscar", response_model=dict)

@@ -4,11 +4,15 @@ from unittest.mock import AsyncMock, patch
 
 from app.rankings.engine import (
     CRITERIOS_DEFAULT,
+    PUNTOS_DEFAULT,
     _aplicar_partido,
+    _asignar_puntos,
     criterios_de_torneo,
     criterios_label,
     normalizar_criterios,
+    normalizar_puntos,
     ordenar_stats,
+    puntos_de_torneo,
     ratio,
 )
 from app.shared.errors import AppError
@@ -97,10 +101,28 @@ class RankingEngineTests(unittest.TestCase):
     def test_configuracion_defecto_y_persistencia_lectura(self):
         t = SimpleNamespace(id="t3", config_visibilidad={})
         self.assertEqual(criterios_de_torneo(t), CRITERIOS_DEFAULT)
+        self.assertEqual(puntos_de_torneo(t), PUNTOS_DEFAULT)
         cfg = get_clasificacion(t)
         self.assertEqual(cfg["criterios"], CRITERIOS_DEFAULT)
+        self.assertEqual(cfg["puntos"], PUNTOS_DEFAULT)
         self.assertEqual(cfg["torneo_id"], "t3")
         self.assertIsNone(cfg["actualizado_en"])
+
+    def test_normalizar_puntos(self):
+        self.assertEqual(normalizar_puntos(None), PUNTOS_DEFAULT)
+        self.assertEqual(normalizar_puntos({"ganado": 5, "empatado": 2, "perdido": 0}), {"ganado": 5, "empatado": 2, "perdido": 0})
+        self.assertEqual(normalizar_puntos({"ganado": -1, "empatado": "x"}), PUNTOS_DEFAULT)
+        self.assertEqual(normalizar_puntos({"ganado": 5}), {"ganado": 5, "empatado": 2, "perdido": 1})
+        t = SimpleNamespace(id="t4", config_visibilidad={"clasificacion": {"puntos": {"ganado": 4, "empatado": 1, "perdido": 0}}})
+        self.assertEqual(puntos_de_torneo(t), {"ganado": 4, "empatado": 1, "perdido": 0})
+
+    def test_puntos_personalizados_por_resultado(self):
+        fila = {"pg": 2, "pe": 1, "pp": 1}
+        _asignar_puntos([fila], {"ganado": 4, "empatado": 2, "perdido": 0})
+        self.assertEqual(fila["pts"], 10)
+        fila2 = {"pg": 2, "pe": 1, "pp": 1}
+        _asignar_puntos([fila2], {"ganado": 3, "empatado": 2, "perdido": 1})
+        self.assertEqual(fila2["pts"], 9)
 
     def test_etiqueta(self):
         self.assertEqual(criterios_label(["puntos", "sets", "puntos_partido"]), "Puntos ganados > Cociente de sets > Cociente de puntos")
@@ -123,6 +145,7 @@ class RankingEngineTests(unittest.TestCase):
             SimpleNamespace(pts_local=15, pts_visitante=12, ganador_id="local"),
         ]
         _aplicar_partido(filas, partido, sets)
+        _asignar_puntos(filas.values(), PUNTOS_DEFAULT)
 
         self.assertEqual(partido.ganador_id, "local")
         self.assertEqual(sets[0].pts_local, 21)
@@ -148,20 +171,26 @@ class PersistenciaClasificacionTests(unittest.IsolatedAsyncioTestCase):
         t1 = SimpleNamespace(id="t1", config_visibilidad={"fixture_visible": True})
         t2 = SimpleNamespace(id="t2", config_visibilidad={})
         db = self.FakeDB()
+        puntos = {"ganado": 5, "empatado": 2, "perdido": 0}
         with patch("app.torneos.clasificacion.compute_tournament_rankings", new=AsyncMock(return_value=[{}, {}])):
-            d1 = await guardar_clasificacion(db, t1, "user-1", ["sets", "puntos"])
+            d1 = await guardar_clasificacion(db, t1, "user-1", ["sets", "puntos"], puntos)
             d2 = await guardar_clasificacion(db, t2, "user-2", ["puntos_partido"])
 
         self.assertTrue(db.flushed)
         self.assertEqual(d1["criterios"], ["sets", "puntos"])
+        self.assertEqual(d1["puntos"], puntos)
         self.assertEqual(d1["actualizado_por"], "user-1")
         self.assertTrue(d1["actualizado_en"])
         self.assertEqual(d1["equipos_recalculados"], 2)
         self.assertTrue(t1.config_visibilidad["fixture_visible"])
         self.assertEqual(t1.config_visibilidad["clasificacion"]["criterios"], ["sets", "puntos"])
+        self.assertEqual(t1.config_visibilidad["clasificacion"]["puntos"], puntos)
         self.assertEqual(t2.config_visibilidad["clasificacion"]["criterios"], ["puntos_partido"])
+        self.assertEqual(t2.config_visibilidad["clasificacion"]["puntos"], PUNTOS_DEFAULT)
         self.assertEqual(criterios_de_torneo(t1), ["sets", "puntos"])
         self.assertEqual(criterios_de_torneo(t2), ["puntos_partido"])
+        self.assertEqual(puntos_de_torneo(t1), puntos)
+        self.assertEqual(puntos_de_torneo(t2), PUNTOS_DEFAULT)
 
     async def test_rechaza_guardar_sin_criterios(self):
         db = self.FakeDB()

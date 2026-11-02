@@ -24,6 +24,24 @@ CRITERIOS_LABEL = {
     "sets": "Cociente de sets",
     "puntos_partido": "Cociente de puntos",
 }
+PUNTOS_DEFAULT = {"ganado": 3, "empatado": 2, "perdido": 1}
+PUNTOS_MIN = 0
+PUNTOS_MAX = 100
+
+
+def normalizar_puntos(value) -> dict:
+    """Normaliza los puntos por resultado. Si falta o es inválido, usa 3/2/1."""
+    if not isinstance(value, dict):
+        return dict(PUNTOS_DEFAULT)
+    out = dict(PUNTOS_DEFAULT)
+    for key in PUNTOS_DEFAULT:
+        try:
+            numero = int(value.get(key, out[key]))
+        except (TypeError, ValueError):
+            continue
+        if PUNTOS_MIN <= numero <= PUNTOS_MAX:
+            out[key] = numero
+    return out
 
 
 def normalizar_criterios(value) -> list[str]:
@@ -50,6 +68,12 @@ def criterios_de_torneo(torneo: Torneo | None) -> list[str]:
     if not torneo:
         return list(CRITERIOS_DEFAULT)
     return normalizar_criterios(config_clasificacion(torneo).get("criterios"))
+
+
+def puntos_de_torneo(torneo: Torneo | None) -> dict:
+    if not torneo:
+        return dict(PUNTOS_DEFAULT)
+    return normalizar_puntos(config_clasificacion(torneo).get("puntos"))
 
 
 def ratio(favor: int | None, contra: int | None) -> Fraction | float:
@@ -132,8 +156,15 @@ def _aplicar_partido(filas: dict[str, dict], partido: Partido, sets: list[SetPar
             visit["sets_favor"] += 1
             local["sets_contra"] += 1
 
-    local["pts"] = local["pg"] * 3 + local["pe"] * 2 + local["pp"]
-    visit["pts"] = visit["pg"] * 3 + visit["pe"] * 2 + visit["pp"]
+
+def _asignar_puntos(filas: Iterable[dict], puntos: dict) -> None:
+    """Calcula los puntos de clasificación con la configuración del torneo."""
+    for row in filas:
+        row["pts"] = (
+            row["pg"] * puntos["ganado"]
+            + row["pe"] * puntos["empatado"]
+            + row["pp"] * puntos["perdido"]
+        )
 
 
 async def _cargar_categoria(db: AsyncSession, categoria_id: str):
@@ -177,6 +208,7 @@ async def compute_group_rankings(db: AsyncSession, categoria_id: str, grupo_id: 
         return []
     _, _, torneo, grupos, equipos = cargado
     criterios = criterios_de_torneo(torneo)
+    puntos = puntos_de_torneo(torneo)
     grupos_por_id = {str(g.id): g for g in grupos}
     seleccionados = [g for g in grupos if grupo_id is None or str(g.id) == str(grupo_id)]
     partidos, sets_por_partido = await _cargar_partidos(db, categoria_id, solo_grupos=True)
@@ -191,6 +223,7 @@ async def compute_group_rankings(db: AsyncSession, categoria_id: str, grupo_id: 
             if str(p.grupo_id) != str(grupo.id):
                 continue
             _aplicar_partido(filas, p, sets_por_partido.get(str(p.id), []))
+        _asignar_puntos(filas.values(), puntos)
         rows = ordenar_stats(list(filas.values()), criterios)
         salida.extend(rows)
     return salida
@@ -202,11 +235,13 @@ async def compute_general_rankings(db: AsyncSession, categoria_id: str) -> list[
         return []
     _, _, torneo, grupos, equipos = cargado
     criterios = criterios_de_torneo(torneo)
+    puntos = puntos_de_torneo(torneo)
     grupos_por_id = {str(g.id): g for g in grupos}
     filas = {str(e.id): _nueva_fila(e, grupos_por_id.get(str(e.grupo_id))) for e in equipos}
     partidos, sets_por_partido = await _cargar_partidos(db, categoria_id, solo_grupos=False)
     for p in partidos:
         _aplicar_partido(filas, p, sets_por_partido.get(str(p.id), []))
+    _asignar_puntos(filas.values(), puntos)
     return ordenar_stats(list(filas.values()), criterios)
 
 

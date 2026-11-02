@@ -13,6 +13,8 @@ from app.rankings.engine import (
     criterios_label,
     compute_tournament_rankings,
     normalizar_criterios,
+    normalizar_puntos,
+    puntos_de_torneo,
 )
 from app.shared.errors import AppError
 from app.torneos.models import Torneo
@@ -25,6 +27,7 @@ def get_clasificacion(torneo: Torneo) -> dict:
         "torneo_id": str(torneo.id),
         "criterios": criterios,
         "criterios_label": criterios_label(criterios),
+        "puntos": puntos_de_torneo(torneo),
         "actualizado_en": cfg.get("actualizado_en"),
         "actualizado_por": cfg.get("actualizado_por"),
     }
@@ -35,13 +38,16 @@ async def guardar_clasificacion(
     torneo: Torneo,
     user_id: str,
     criterios: list[str],
+    puntos: dict | None = None,
 ) -> dict:
     if not criterios:
         raise AppError(400, "SIN_CRITERIOS", "Selecciona al menos un criterio de clasificación")
     criterios = normalizar_criterios(criterios)
+    puntos = normalizar_puntos(puntos)
     vis = dict(torneo.config_visibilidad or {})
     vis["clasificacion"] = {
         "criterios": criterios,
+        "puntos": puntos,
         "actualizado_en": datetime.now(timezone.utc).isoformat(),
         "actualizado_por": str(user_id),
     }
