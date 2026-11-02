@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
-from datetime import datetime
+from datetime import date, datetime
 
 class RegisterIn(BaseModel):
     email: EmailStr
@@ -23,6 +23,9 @@ class MeOut(BaseModel):
     id: str
     email: str
     nombre_completo: Optional[str]
+    avatar_url: Optional[str] = None
+    telefono: Optional[str] = None
+    fecha_nacimiento: Optional[date] = None
     roles: List[str]
     created_at: datetime
 
@@ -33,3 +36,4 @@ class ProfileSelfUpdate(BaseModel):
     nombre_completo: Optional[str] = Field(default=None, min_length=2, max_length=120)
     avatar_url: Optional[str] = Field(default=None, max_length=500)
     telefono: Optional[str] = Field(default=None, max_length=20)
+    fecha_nacimiento: Optional[date] = None

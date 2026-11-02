@@ -32,8 +32,10 @@ async def _verify_categoria_owner(db: AsyncSession, categoria_id: str, user_id: 
         raise Forbidden("No eres organizador de este torneo")
 
 @categoria_fixture_router.get("/grupos", response_model=dict)
-async def listar_grupos_categoria(categoria_id: str, request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await _verify_categoria_owner(db, categoria_id, user.id, "super_admin" in getattr(request.state, "roles", []), "organizador" in getattr(request.state, "roles", []))
+async def listar_grupos_categoria(categoria_id: str, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Los nombres/orden de grupo no son datos sensibles y son necesarios para
+    # que atletas y jueces puedan filtrar el fixture. Las mutaciones siguen
+    # protegidas por _verify_categoria_owner.
     from app.torneos.models import Grupo
     res = await db.execute(select(Grupo).where(Grupo.categoria_id == categoria_id).order_by(Grupo.orden))
     grupos = res.scalars().all()

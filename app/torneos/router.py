@@ -6,7 +6,7 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.shared.errors import AppError, NotFound, Forbidden, BadRequest
 from app.torneos.schemas import CategoriaIn, CategoriaUpdate, RamaIn, RamaUpdate, TorneoCreate, TorneoUpdate, VisibilidadUpdate, JuezVincularIn, JuezRolIn, ComunicarIn, ClasificacionIn
-from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, get_torneo_publico, requiere_visibilidad, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
+from app.torneos.service import create_categoria, create_rama, delete_categoria, delete_rama, create_torneo, delete_torneo, get_torneo_detail, list_torneos, list_torneos_publicos, list_mis_torneos, update_categoria, update_rama, update_torneo, update_visibilidad, get_public_by_slug, get_torneo_publico, requiere_visibilidad, listar_jueces, vincular_juez, desvincular_juez, asignar_rol_juez, buscar_usuarios_jueces, get_tablero, list_amonestaciones_torneo, get_inscripciones, get_deportistas, comunicar
 from app.torneos.models import Torneo, Grupo
 from app.torneos.en_vivo import get_centro_en_vivo
 from app.torneos.clasificacion import get_clasificacion, guardar_clasificacion
@@ -34,6 +34,12 @@ async def listar_torneos(request: Request, user=Depends(get_current_user), db: A
     is_org = "organizador" in getattr(request.state, "roles", [])
     torneos = await list_torneos(db, user.id, is_super, is_org)
     data = [{"id": t.id, "nombre": t.nombre, "slug": t.slug, "estado": t.estado, "publico": t.publico, "ciudad": t.ciudad, "imagen_url": (t.config_visibilidad or {}).get("imagen_url")} for t in torneos]
+    return {"success": True, "data": data, "error": None}
+
+@router.get("/mis-torneos", response_model=dict)
+async def mis_torneos(request: Request, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    is_super = "super_admin" in getattr(request.state, "roles", [])
+    data = await list_mis_torneos(db, None if is_super else user.id)
     return {"success": True, "data": data, "error": None}
 
 @router.get("/{torneo_id}/clasificacion", response_model=dict)

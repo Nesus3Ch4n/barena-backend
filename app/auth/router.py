@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -7,9 +7,23 @@ from app.shared.database import get_db
 from app.shared.security import get_current_user
 from app.auth.schemas import RegisterIn, LoginIn, RefreshIn, TokenOut, MeOut, ReclamarIn, ProfileSelfUpdate
 from app.auth.service import register_user, login_user, refresh_token, logout_user, reclamar_atleta, get_roles_for_user, get_profile, update_profile_for_user
+from app.auth.avatar import guardar_avatar
 from app.auth.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _me_data(user: User, profile, roles: list[str]) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "nombre_completo": profile.nombre_completo if profile else None,
+        "avatar_url": profile.avatar_url if profile else None,
+        "telefono": profile.telefono if profile else None,
+        "fecha_nacimiento": profile.fecha_nacimiento.isoformat() if profile and profile.fecha_nacimiento else None,
+        "roles": roles,
+        "created_at": user.created_at.isoformat() if user.created_at else datetime.now(timezone.utc).isoformat(),
+    }
 
 @router.get("/health")
 async def health():
@@ -39,33 +53,21 @@ async def logout(body: RefreshIn, db: AsyncSession = Depends(get_db)):
 async def me(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     roles = await get_roles_for_user(db, user.id)
     profile = await get_profile(db, user.id)
-    return {
-        "success": True,
-        "data": {
-            "id": user.id,
-            "email": user.email,
-            "nombre_completo": profile.nombre_completo if profile else None,
-            "roles": roles,
-            "created_at": user.created_at.isoformat() if user.created_at else datetime.now(timezone.utc).isoformat(),
-        },
-        "error": None,
-    }
+    return {"success": True, "data": _me_data(user, profile, roles), "error": None}
 
 @router.patch("/me", response_model=dict)
 async def patch_me(body: ProfileSelfUpdate, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     profile = await update_profile_for_user(db, user.id, body)
     roles = await get_roles_for_user(db, user.id)
-    return {
-        "success": True,
-        "data": {
-            "id": user.id,
-            "email": user.email,
-            "nombre_completo": profile.nombre_completo,
-            "roles": roles,
-            "created_at": user.created_at.isoformat() if user.created_at else datetime.now(timezone.utc).isoformat(),
-        },
-        "error": None,
-    }
+    return {"success": True, "data": _me_data(user, profile, roles), "error": None}
+
+@router.post("/me/avatar", response_model=dict)
+async def subir_avatar(file: UploadFile = File(...), user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await guardar_avatar(db, user.id, file)
+    profile = await get_profile(db, user.id)
+    roles = await get_roles_for_user(db, user.id)
+    return {"success": True, "data": _me_data(user, profile, roles), "error": None}
+
 
 @router.post("/reclamar", response_model=dict)
 async def reclamar(body: ReclamarIn, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

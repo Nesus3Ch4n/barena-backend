@@ -142,6 +142,73 @@ async def list_torneos(db: AsyncSession, user_id: str, is_super: bool, is_org: b
         res = await db.execute(select(Torneo).where(or_(Torneo.organizador_id == user_id, Torneo.publico == True)).order_by(Torneo.creado_en.desc()))
     return res.scalars().all()
 
+
+async def list_mis_torneos(db: AsyncSession, user_id: str | None):
+    """Torneos propios con contadores reales para el perfil del organizador.
+
+    user_id=None se usa para super_admin y devuelve todos los torneos.
+    """
+    categorias = (
+        select(func.count(Categoria.id))
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id == Torneo.id)
+        .correlate(Torneo)
+        .scalar_subquery()
+    )
+    equipos = (
+        select(func.count(Equipo.id))
+        .join(Categoria, Equipo.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id == Torneo.id)
+        .correlate(Torneo)
+        .scalar_subquery()
+    )
+    partidos = (
+        select(func.count(Partido.id))
+        .join(Categoria, Partido.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id == Torneo.id)
+        .correlate(Torneo)
+        .scalar_subquery()
+    )
+    finalizados = (
+        select(func.count(Partido.id))
+        .join(Categoria, Partido.categoria_id == Categoria.id)
+        .join(Rama, Categoria.rama_id == Rama.id)
+        .where(Rama.torneo_id == Torneo.id, Partido.estado == "finalizado")
+        .correlate(Torneo)
+        .scalar_subquery()
+    )
+    consulta = select(
+        Torneo,
+        categorias.label("categorias"),
+        equipos.label("equipos"),
+        partidos.label("partidos"),
+        finalizados.label("partidos_finalizados"),
+    )
+    if user_id:
+        consulta = consulta.where(Torneo.organizador_id == user_id)
+    res = await db.execute(consulta.order_by(Torneo.creado_en.desc()))
+    out = []
+    for torneo, n_cat, n_eq, n_par, n_fin in res.all():
+        out.append({
+            "id": torneo.id,
+            "nombre": torneo.nombre,
+            "slug": torneo.slug,
+            "estado": torneo.estado,
+            "publico": torneo.publico,
+            "ciudad": torneo.ciudad,
+            "sede": torneo.sede,
+            "fecha_inicio": torneo.fecha_inicio.isoformat() if torneo.fecha_inicio else None,
+            "fecha_fin": torneo.fecha_fin.isoformat() if torneo.fecha_fin else None,
+            "imagen_url": (torneo.config_visibilidad or {}).get("imagen_url"),
+            "categorias": n_cat or 0,
+            "equipos": n_eq or 0,
+            "partidos": n_par or 0,
+            "partidos_finalizados": n_fin or 0,
+        })
+    return out
+
 async def update_visibilidad(db: AsyncSession, torneo_id: str, data: VisibilidadUpdate) -> Torneo:
     res = await db.execute(select(Torneo).where(Torneo.id == torneo_id))
     torneo = res.scalar_one_or_none()

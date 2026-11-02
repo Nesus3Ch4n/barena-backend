@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import String, DateTime, func, Table, Column, ForeignKey
+from sqlalchemy import String, Date, DateTime, func, Table, Column, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.shared.database import Base
 
@@ -29,7 +29,7 @@ class Profile(Base):
     avatar_url: Mapped[str] = mapped_column(String(500), nullable=True)
     telefono: Mapped[str] = mapped_column(String(20), nullable=True)
     doc_identidad: Mapped[str] = mapped_column(String(30), nullable=True)
-    fecha_nacimiento: Mapped[str] = mapped_column(DateTime, nullable=True)
+    fecha_nacimiento: Mapped[str] = mapped_column(Date, nullable=True)
 
     user = relationship("User", back_populates="profile")
 
