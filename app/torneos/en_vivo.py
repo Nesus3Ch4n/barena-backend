@@ -19,7 +19,12 @@ from app.atletas.models import Atleta
 from app.equipos.models import Equipo
 from app.partidos.models import Partido, PartidoEvento
 from app.partidos.service import list_partidos_detalle, live_snapshot
-from app.rankings.models import RankingGeneral, RankingGrupo
+from app.rankings.engine import (
+    compute_general_rankings,
+    compute_group_rankings,
+    criterios_de_torneo,
+    criterios_label,
+)
 from app.shared.errors import NotFound
 from app.torneos.models import Categoria, Grupo, Rama, Torneo
 from app.torneos.service import _estado_publico, visibilidad
@@ -217,6 +222,7 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
     ver_fixture = bool(vis.get("fixture_visible"))
     ver_posiciones = bool(vis.get("posiciones_visible") or vis.get("ranking_visible"))
     ver_ranking = bool(vis.get("ranking_visible"))
+    criterio_torneo = criterios_label(criterios_de_torneo(torneo))
     ahora = _ahora()
 
     # Categorías y grupos del torneo (nombres y reglas para mostrar).
@@ -258,7 +264,6 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
         .where(Rama.torneo_id == torneo.id)
     )).scalars().all()
     nombres = {e.id: e.nombre for e in equipos_rows}
-    grupo_de = {e.id: e.grupo_id for e in equipos_rows}
     equipo_ids = list(nombres.keys())
     atletas_por_equipo: dict[str, list[dict]] = {eid: [] for eid in equipo_ids}
     if equipo_ids:
@@ -364,38 +369,30 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
         for p in finalizados[:20]
     ]
 
-    # ---- Posiciones por grupo ----
+    # ---- Posiciones por grupo (motor centralizado, criterios del torneo) ----
     tablas: list[dict] = []
     if ver_posiciones:
-        filas = (await db.execute(
-            select(RankingGrupo, Grupo, Categoria, Rama)
-            .join(Grupo, RankingGrupo.grupo_id == Grupo.id)
-            .join(Categoria, Grupo.categoria_id == Categoria.id)
-            .join(Rama, Categoria.rama_id == Rama.id)
-            .where(Rama.torneo_id == torneo.id)
-            .order_by(Categoria.nombre, Grupo.orden, RankingGrupo.posicion)
-        )).all()
         por_grupo: dict[str, list] = {}
-        for r, g, c, ra in filas:
-            cat = categorias.get(c.id) or {}
+        for cat in categorias.values():
             corte = cat.get("clasificados") or cat.get("avance_x_grupo") or 0
-            por_grupo.setdefault(g.id, []).append({
-                "posicion": r.posicion,
-                "equipo_id": r.equipo_id,
-                "equipo_nombre": nombres.get(r.equipo_id, "Equipo"),
-                "pj": r.pj or 0,
-                "pg": r.pg or 0,
-                "pe": r.pe or 0,
-                "pp": r.pp or 0,
-                "pts": r.pts or 0,
-                "sets_favor": r.sets_favor or 0,
-                "sets_contra": r.sets_contra or 0,
-                "puntos_favor": r.puntos_favor or 0,
-                "puntos_contra": r.puntos_contra or 0,
-                "diferencia": (r.puntos_favor or 0) - (r.puntos_contra or 0),
-                "sanciones": r.sanciones or 0,
-                "clasifica": bool(corte) and (r.posicion or 0) <= corte,
-            })
+            for r in await compute_group_rankings(db, cat["id"]):
+                por_grupo.setdefault(r["grupo_id"], []).append({
+                    "posicion": r["posicion"],
+                    "equipo_id": r["equipo_id"],
+                    "equipo_nombre": r["equipo_nombre"] or nombres.get(r["equipo_id"], "Equipo"),
+                    "pj": r["pj"],
+                    "pg": r["pg"],
+                    "pe": r["pe"],
+                    "pp": r["pp"],
+                    "pts": r["pts"],
+                    "sets_favor": r["sets_favor"],
+                    "sets_contra": r["sets_contra"],
+                    "puntos_favor": r["puntos_favor"],
+                    "puntos_contra": r["puntos_contra"],
+                    "diferencia": r["puntos_favor"] - r["puntos_contra"],
+                    "sanciones": r["sanciones"],
+                    "clasifica": bool(corte) and (r["posicion"] or 0) <= corte,
+                })
         for g in grupos_rows:
             cat = categorias.get(g.categoria_id) or {}
             tablas.append({
@@ -404,47 +401,39 @@ async def get_centro_en_vivo(db: AsyncSession, identificador: str) -> dict:
                 "categoria_id": g.categoria_id,
                 "categoria_nombre": cat.get("nombre"),
                 "rama": cat.get("rama"),
-                "criterio": cat.get("criterio_clasif"),
+                "criterio": criterio_torneo,
                 "avance": cat.get("clasificados") or cat.get("avance_x_grupo") or 0,
                 "posiciones": por_grupo.get(g.id, []),
             })
 
-    # ---- Ranking general del torneo ----
+    # ---- Ranking general del torneo (mismo motor y criterios) ----
     ranking: list[dict] = []
     if ver_ranking:
-        filas = (await db.execute(
-            select(RankingGeneral, Categoria, Rama, Equipo, Grupo)
-            .join(Categoria, RankingGeneral.categoria_id == Categoria.id)
-            .join(Rama, Categoria.rama_id == Rama.id)
-            .join(Equipo, Equipo.id == RankingGeneral.equipo_id)
-            .outerjoin(Grupo, Equipo.grupo_id == Grupo.id)
-            .where(Rama.torneo_id == torneo.id)
-        )).all()
-        for r, c, ra, eq, g in filas:
-            cat = categorias.get(c.id) or {}
+        for cat in categorias.values():
             if not cat.get("ranking_general_enabled", True):
                 continue
-            ranking.append({
-                "equipo_id": r.equipo_id,
-                "equipo_nombre": nombres.get(r.equipo_id, eq.nombre),
-                "categoria_id": c.id,
-                "categoria_nombre": c.nombre,
-                "rama": _rama_label(ra),
-                "grupo_id": g.id if g else None,
-                "grupo_nombre": g.nombre if g else None,
-                "posicion_categoria": r.posicion,
-                "pj": r.pj or 0,
-                "pg": r.pg or 0,
-                "pe": r.pe or 0,
-                "pp": r.pp or 0,
-                "pts": r.pts or 0,
-                "sets_favor": r.sets_favor or 0,
-                "sets_contra": r.sets_contra or 0,
-                "puntos_favor": r.puntos_favor or 0,
-                "puntos_contra": r.puntos_contra or 0,
-                "diferencia": (r.puntos_favor or 0) - (r.puntos_contra or 0),
-                "sanciones": r.sanciones or 0,
-            })
+            for r in await compute_general_rankings(db, cat["id"]):
+                ranking.append({
+                    "equipo_id": r["equipo_id"],
+                    "equipo_nombre": r["equipo_nombre"] or nombres.get(r["equipo_id"], "Equipo"),
+                    "categoria_id": cat["id"],
+                    "categoria_nombre": cat["nombre"],
+                    "rama": cat["rama"],
+                    "grupo_id": r["grupo_id"],
+                    "grupo_nombre": r["grupo_nombre"],
+                    "posicion_categoria": r["posicion"],
+                    "pj": r["pj"],
+                    "pg": r["pg"],
+                    "pe": r["pe"],
+                    "pp": r["pp"],
+                    "pts": r["pts"],
+                    "sets_favor": r["sets_favor"],
+                    "sets_contra": r["sets_contra"],
+                    "puntos_favor": r["puntos_favor"],
+                    "puntos_contra": r["puntos_contra"],
+                    "diferencia": r["puntos_favor"] - r["puntos_contra"],
+                    "sanciones": r["sanciones"],
+                })
         # Cada categoría conserva el orden oficial de su ranking general; no se
         # mezclan categorías con una fórmula nueva.
         ranking.sort(key=lambda x: ((x["categoria_nombre"] or "").lower(), x["posicion_categoria"] or 0, x["equipo_nombre"].lower()))
