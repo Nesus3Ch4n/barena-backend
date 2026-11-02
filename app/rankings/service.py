@@ -3,19 +3,28 @@ from sqlalchemy import select
 
 
 async def global_ranking(db: AsyncSession, limit: int = 50):
-    """Ranking global del circuito: suma pts de rankings_general por dupla de atletas.
+    """Ranking global del circuito: suma los puntos de clasificación por dupla.
 
-    Los puntos de clasificación (pts) no dependen del orden de criterios; solo
-    las posiciones. Por eso este ranking de circuito puede seguir usando la
-    caché rankings_general, que los triggers mantienen al registrar resultados.
+    Usa pg/pe/pp de la caché rankings_general (actualizada por los triggers de
+    resultados) y aplica los puntos por resultado configurados en cada torneo.
     """
     from app.rankings.models import RankingGeneral
+    from app.rankings.engine import normalizar_puntos
     from app.torneos.models import Rama, Categoria, Torneo
     from app.equipos.models import Equipo
     from app.atletas.models import Atleta
 
     rows = (await db.execute(
-        select(RankingGeneral.equipo_id, RankingGeneral.pts, Rama.torneo_id, Equipo.nombre, Equipo.ciudad)
+        select(
+            RankingGeneral.equipo_id,
+            RankingGeneral.pg,
+            RankingGeneral.pe,
+            RankingGeneral.pp,
+            Rama.torneo_id,
+            Equipo.nombre,
+            Equipo.ciudad,
+            Torneo.config_visibilidad,
+        )
         .join(Categoria, RankingGeneral.categoria_id == Categoria.id)
         .join(Rama, Categoria.rama_id == Rama.id)
         .join(Torneo, Rama.torneo_id == Torneo.id)
@@ -34,7 +43,11 @@ async def global_ranking(db: AsyncSession, limit: int = 50):
         nombres.setdefault(eq_id, []).append(nombre)
 
     acumulado: dict = {}
-    for equipo_id, pts, torneo_id, equipo_nombre, ciudad in rows:
+    for equipo_id, pg, pe, pp, torneo_id, equipo_nombre, ciudad, config_visibilidad in rows:
+        config = config_visibilidad if isinstance(config_visibilidad, dict) else {}
+        clasificacion = config.get("clasificacion") if isinstance(config.get("clasificacion"), dict) else {}
+        puntos = normalizar_puntos(clasificacion.get("puntos"))
+        pts = (pg or 0) * puntos["ganado"] + (pe or 0) * puntos["empatado"] + (pp or 0) * puntos["perdido"]
         jugadores = tuple(sorted(nombres.get(equipo_id) or []))
         clave = ("dupla", jugadores) if jugadores else ("equipo", equipo_id)
         item = acumulado.setdefault(clave, {
@@ -44,7 +57,7 @@ async def global_ranking(db: AsyncSession, limit: int = 50):
             "pts": 0,
             "torneos": set(),
         })
-        item["pts"] += pts or 0
+        item["pts"] += pts
         item["torneos"].add(torneo_id)
 
     ordenados = sorted(acumulado.values(), key=lambda x: (-x["pts"], x["nombre"]))
